@@ -168,6 +168,74 @@ public class BillRepository
     }
 
     /// <summary>
+    /// 新增或编辑一条流水：写入它自身的日期，并保留该日期已有的其它记录。
+    /// 编辑时若改了日期（<paramref name="previousDate"/> 与 <see cref="BillEntry.Date"/> 不同），
+    /// 再从原日期摘掉这一条。两次磁盘操作在同一次写锁内完成。
+    /// </summary>
+    /// <returns>是否落盘成功。失败时调用方应当告知用户。</returns>
+    public async Task<bool> UpsertEntryAsync(
+        BillEntry entry, DateOnly? previousDate = null, CancellationToken ct = default)
+    {
+        await _writeGate.WaitAsync(ct);
+        try
+        {
+            if (previousDate is { } old && old != entry.Date)
+                await RemoveEntryFromDayAsync(old, entry.Id, ct);
+
+            await MergeEntryIntoDayAsync(entry, ct);
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log.Warning(ex, "保存账单失败: {Date}", entry.Date);
+            return false;
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
+    }
+
+    /// <summary>把一条流水写进它自身的日期文件：同 Id 覆盖，新 Id 追加，其余记录不动。</summary>
+    private async Task MergeEntryIntoDayAsync(BillEntry entry, CancellationToken ct)
+    {
+        var file = Path.Combine(DayDirectory(entry.Date), IndexFileName);
+        var list = File.Exists(file) ? await ReadDayFileAsync(file, ct) : [];
+
+        int existing = list.FindIndex(e => e.Id == entry.Id);
+        if (existing >= 0) list[existing] = entry;
+        else list.Add(entry);
+
+        await WriteDayAsync(entry.Date, list, ct);
+
+        lock (_index) _index[entry.Date] = list;
+    }
+
+    /// <summary>从某天的文件里摘掉一条流水；该日期因此变空时连同目录一起收掉。</summary>
+    private async Task RemoveEntryFromDayAsync(DateOnly date, Guid id, CancellationToken ct)
+    {
+        var file = Path.Combine(DayDirectory(date), IndexFileName);
+        if (!File.Exists(file)) return;
+
+        var list = await ReadDayFileAsync(file, ct);
+        if (list.RemoveAll(e => e.Id == id) == 0) return;
+
+        if (list.Count == 0)
+        {
+            File.Delete(file);
+            PruneEmptyFolders(DayDirectory(date));
+
+            lock (_index) _index.Remove(date);
+            return;
+        }
+
+        await WriteDayAsync(date, list, ct);
+
+        lock (_index) _index[date] = list;
+    }
+
+    /// <summary>
     /// 自下而上收掉因此变空的日 / 月 / 年目录。非空或被占用时停止，所以不能传
     /// <c>recursive: true</c>；循环上限 3 层，保证不会动到 <see cref="Constants.BillFolder"/> 本身。
     /// </summary>

@@ -82,6 +82,7 @@ public enum CalendarViewMode
 /// <summary>
 /// 日历账单页面。日 / 月 / 年三种粒度共用同一个当前定位 <see cref="_anchor"/>，
 /// 切换粒度只改变聚合方式；上一页 / 下一页的步长由当前粒度决定。
+/// 日视图下可以像今日页那样直接记一笔，草稿日期默认是当前定位。
 /// </summary>
 public partial class CalenderBillViewModel : ObservableObject
 {
@@ -94,6 +95,12 @@ public partial class CalenderBillViewModel : ObservableObject
     {
         _repository = repository;
 
+        Editor = new BillEditorViewModel(repository)
+        {
+            Saved = OnEntrySaved,
+            SaveFailed = message => Notice = message
+        };
+
         PreviousCommand = new RelayCommand(() => Shift(-1));
         NextCommand = new RelayCommand(() => Shift(1));
         TodayCommand = new RelayCommand(GoToday);
@@ -101,9 +108,13 @@ public partial class CalenderBillViewModel : ObservableObject
         ShowMonthCommand = new RelayCommand(() => SetMode(CalendarViewMode.Month));
         ShowYearCommand = new RelayCommand(() => SetMode(CalendarViewMode.Year));
         SelectDayCommand = new RelayCommand<CalendarCell>(SelectDay);
+        AddCommand = new RelayCommand(OpenEditor, () => !Editor.IsOpen);
 
         _ = RefreshAsync();
     }
+
+    /// <summary>由今日页与日历页共用的编辑面板</summary>
+    public BillEditorViewModel Editor { get; }
 
     // ---- 命令 ----
 
@@ -114,6 +125,43 @@ public partial class CalenderBillViewModel : ObservableObject
     public ICommand ShowMonthCommand { get; }
     public ICommand ShowYearCommand { get; }
     public ICommand SelectDayCommand { get; }
+
+    /// <summary>日视图右下角的新增按钮</summary>
+    public ICommand AddCommand { get; }
+
+    // ---- 编辑面板 ----
+
+    private string _notice = "";
+
+    /// <summary>保存结果的一次性提示</summary>
+    public string Notice
+    {
+        get => _notice;
+        private set
+        {
+            if (SetProperty(ref _notice, value))
+                OnPropertyChanged(nameof(HasNotice));
+        }
+    }
+
+    public bool HasNotice => !string.IsNullOrEmpty(Notice);
+
+    private void OpenEditor()
+    {
+        Notice = "";
+        Editor.OpenForCreate(_anchor);
+    }
+
+    /// <summary>
+    /// 面板写盘后回调。本页能看到任意一天，所以刷新当前粒度即可；
+    /// 只有这笔没落在当前定位上时才提示，否则提示是多余的。
+    /// </summary>
+    private async Task OnEntrySaved(BillEntry entry)
+    {
+        await UiThread.RunAsync(RefreshAsync);
+
+        Notice = entry.Date == _anchor ? "" : $"已记到 {entry.Date:yyyy-MM-dd}";
+    }
 
     // ---- 视图状态 ----
 

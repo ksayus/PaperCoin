@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:conv="clr-namespace:PaperCoin.Converters"
+             xmlns:views="clr-namespace:PaperCoin.Views"
              Background="Transparent">
 
     <UserControl.Resources>
@@ -15,6 +16,7 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
             <!-- 期间导航。三段式列定义（左右 Auto、标题 *）：标题最长可达 "2026 年 12 月 31 日"，用 * 吃掉剩余宽度并省略，不会与右侧按钮相撞。 -->
@@ -274,6 +276,38 @@
                     </TextBlock>
                 </Grid>
             </Grid>
+
+            <!-- 保存结果的一次性提示 -->
+            <TextBlock Grid.Row="3" Text="{Binding Notice}"
+                       FontSize="11" Margin="0,0,0,6"
+                       TextWrapping="Wrap"
+                       HorizontalAlignment="Left" VerticalAlignment="Center"
+                       Foreground="{DynamicResource ColorTextSecondary}"
+                       Visibility="{Binding HasNotice, Converter={StaticResource BoolToVis}}"/>
+
+            <!-- 右下角 + 号，只在日视图显示：月 / 年视图下“记到哪一天”没有唯一答案。
+                 Click 只负责 Q 弹动效，打开面板由 AddCommand 完成。 -->
+            <Button x:Name="AddNewBill" Grid.Row="3"
+                    Style="{DynamicResource AddNewBill}"
+                    RenderTransformOrigin="0.5,0.5"
+                    HorizontalAlignment="Right"
+                    Visibility="{Binding IsDayMode, Converter={StaticResource BoolToVis}}"
+                    Click="AddNewBill_Click"
+                    Command="{Binding AddCommand}">
+                <Button.RenderTransform>
+                    <TransformGroup>
+                        <ScaleTransform x:Name="AddNewBillBtnScaleTransform" ScaleX="1" ScaleY="1"/>
+                    </TransformGroup>
+                </Button.RenderTransform>
+            </Button>
+
+            <!-- 浮动编辑面板，DataContext 是 CalenderBillViewModel.Editor，Grid.RowSpan 覆盖全部行避免开合时重排列表。
+                 负外边距与 TodayBill 的对应值是一对，改一个必须改另一个。 -->
+            <views:BillEditorOverlay x:Name="Editor"
+                                     Grid.RowSpan="4"
+                                     Margin="-16,-12,-16,-12"
+                                     Panel.ZIndex="10"
+                                     DataContext="{Binding Editor}"/>
         </Grid>
     </Border>
 </UserControl>

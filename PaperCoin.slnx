@@ -2,6 +2,8 @@
   <Project Path="LivelyAnimationEngine/LAE/LivelyAnimationEngine.csproj" />
   <Project Path="PaperCoin.Core/PaperCoin.Core.csproj" Id="2fb402b9-be98-486f-ae31-c3fb427c8dec" />
   <Project Path="PaperCoin.Service/PaperCoin.Service.csproj" Id="6a656b79-af82-4818-ba61-d0e8ac90a312" />
-  <Project Path="PaperCoin.Setup/PaperCoin.Setup.vdproj" Type="Installer" />
+  <Project Path="PaperCoin.Setup/PaperCoin.Setup.vdproj" Type="Installer">
+    <Build />
+  </Project>
   <Project Path="PaperCoin/PaperCoin.csproj" />
 </Solution>

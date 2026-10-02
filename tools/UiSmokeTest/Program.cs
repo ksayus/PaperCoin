@@ -362,9 +362,9 @@ internal static class Program
         for (int i = 0; i < 3; i++)
         {
             vm.AddCommand.Execute(null);
-            vm.DraftDescription = $"测试条目 {i}";
-            vm.DraftAmountText = $"-{i + 1}.5";
-            vm.SaveCommand.Execute(null);
+            vm.Editor.DraftDescription = $"测试条目 {i}";
+            vm.Editor.DraftAmountText = $"-{i + 1}.5";
+            vm.Editor.SaveCommand.Execute(null);
         }
 
         WaitUntil(() => vm.Entries.Count >= 3);
@@ -419,17 +419,20 @@ internal static class Program
         Pump();
         Layout(view);
 
-        var panel = FindField<Grid>(view, "EditorPanel")
-            ?? throw new Exception("找不到编辑面板");
+        var overlay = FindField<BillEditorOverlay>(view, "Editor")
+            ?? throw new Exception("找不到编辑面板 BillEditorOverlay");
 
-        if (panel.Visibility != Visibility.Visible) throw new Exception("编辑面板没有显示");
+        if (overlay.Visibility != Visibility.Visible) throw new Exception("编辑面板没有显示");
+
+        var panel = FindField<Grid>(overlay, "EditorPanel")
+            ?? throw new Exception("找不到编辑面板的 EditorPanel");
 
         var panelBounds = BoundsIn(view, panel);
         Report($"编辑面板 = {panelBounds.X:0.#},{panelBounds.Y:0.#} {panelBounds.Width:0.#}x{panelBounds.Height:0.#}");
         AssertInside(view, panelBounds, "编辑面板");
 
         // 遮罩必须铺满整个内容区，内缩的话四周会露出一圈没压暗的边。
-        var scrim = FindField<Border>(view, "EditorScrim")
+        var scrim = FindField<Border>(overlay, "EditorScrim")
             ?? throw new Exception("找不到遮罩层 EditorScrim");
 
         var scrimBounds = BoundsIn(view, scrim);
@@ -451,7 +454,7 @@ internal static class Program
 
         foreach (var name in new[] { "DescriptionBox" })
         {
-            var box = FindField<TextBox>(view, name)!;
+            var box = FindField<TextBox>(overlay, name)!;
             if (box.ActualWidth < 10 || box.ActualHeight < 10)
                 throw new Exception($"{name} 尺寸异常: {box.ActualWidth:0.#}x{box.ActualHeight:0.#}");
         }
@@ -490,27 +493,27 @@ internal static class Program
 
         // 空草稿即无效，HasError 必须为 true（保存按钮据此禁用）；提示则要等到
         // 用户碰过字段再显示。
-        if (!vm.HasError)
+        if (!vm.Editor.HasError)
             throw new Exception("空草稿应当判为无效（否则保存按钮会亮着可用）");
 
-        if (!string.IsNullOrEmpty(vm.ErrorMessage))
-            throw new Exception($"刚打开面板就显示错误提示: {vm.ErrorMessage}");
+        if (!string.IsNullOrEmpty(vm.Editor.ErrorMessage))
+            throw new Exception($"刚打开面板就显示错误提示: {vm.Editor.ErrorMessage}");
 
-        if (vm.SaveCommand.CanExecute(null))
+        if (vm.Editor.SaveCommand.CanExecute(null))
             throw new Exception("空草稿时保存按钮应当不可用");
 
         // 用户开始输入后才给提示
-        vm.DraftDescription = "有描述";
-        Report($"只填描述时 提示='{vm.ErrorMessage}'");
+        vm.Editor.DraftDescription = "有描述";
+        Report($"只填描述时 提示='{vm.Editor.ErrorMessage}'");
 
-        vm.DraftDescription = "冒烟";
-        vm.DraftAmountText = "-1";
-        Report($"填齐后 提示='{vm.ErrorMessage}' HasError={vm.HasError}");
+        vm.Editor.DraftDescription = "冒烟";
+        vm.Editor.DraftAmountText = "-1";
+        Report($"填齐后 提示='{vm.Editor.ErrorMessage}' HasError={vm.Editor.HasError}");
 
-        if (vm.HasError) throw new Exception("合法草稿时不应判为有错");
-        if (!vm.SaveCommand.CanExecute(null)) throw new Exception("合法草稿时保存应可用");
+        if (vm.Editor.HasError) throw new Exception("合法草稿时不应判为有错");
+        if (!vm.Editor.SaveCommand.CanExecute(null)) throw new Exception("合法草稿时保存应可用");
 
-        vm.SaveCommand.Execute(null);
+        vm.Editor.SaveCommand.Execute(null);
 
         WaitUntil(() => vm.Entries.Count > 0);
 
@@ -523,10 +526,10 @@ internal static class Program
         int todayCountBefore = vm.Entries.Count;
 
         vm.AddCommand.Execute(null);
-        vm.DraftDescription = "历史";
-        vm.DraftAmountText = "-2";
-        vm.DraftDate = DateTime.Today.AddDays(-10);
-        vm.SaveCommand.Execute(null);
+        vm.Editor.DraftDescription = "历史";
+        vm.Editor.DraftAmountText = "-2";
+        vm.Editor.DraftDate = DateTime.Today.AddDays(-10);
+        vm.Editor.SaveCommand.Execute(null);
 
         // 不能等条目数回落：记到历史日期的条目本来就不在今日列表里，条目数前后
         // 一样，那个条件一开始就是假的。改等真正的异步结果（提示）。
@@ -546,6 +549,29 @@ internal static class Program
         if (!vm.HasNotice)
             throw new Exception($"记到历史日期后没有给出提示（提示='{vm.Notice}'）");
 
+        // 回归：往同一天再记一笔，不能覆盖这一天已有的记录。写入是按日期分组整日覆盖的，
+        // 一旦把“本次提交涉及哪几天”当成“这几天就只剩这些内容”，目标日期的旧记录就会被抹掉。
+        var pastDate = DateTime.Today.AddDays(-10);
+        int pastBefore = CountDayEntries(pastDate);
+
+        if (pastBefore != 1)
+            throw new Exception($"测试前提不成立: {pastDate:yyyy-MM-dd} 应有 1 条, 实际 {pastBefore}");
+
+        vm.AddCommand.Execute(null);
+        vm.Editor.DraftDescription = "历史二";
+        vm.Editor.DraftAmountText = "-3";
+        vm.Editor.DraftDate = pastDate;
+        vm.Editor.SaveCommand.Execute(null);
+
+        WaitUntil(() => CountDayEntries(pastDate) == pastBefore + 1, rounds: 100);
+
+        int pastAfter = CountDayEntries(pastDate);
+        Report($"同日再记一笔后 {pastDate:yyyy-MM-dd} 的记录数 = {pastAfter}（原 {pastBefore}）");
+
+        if (pastAfter != pastBefore + 1)
+            throw new Exception(
+                $"往同一天记第二笔覆盖了既有记录: {pastDate:yyyy-MM-dd} 原有 {pastBefore} 条, 现在 {pastAfter} 条");
+
         DrainSaves();
         DrainSaves();
         CleanupDate(DateTime.Today);
@@ -560,10 +586,10 @@ internal static class Program
         // 真实保存链路写盘，再让日历从磁盘读。
         var seed = new TodayBillViewModel(NewRepository());
         seed.AddCommand.Execute(null);
-        seed.DraftDescription = "日历明细样张";
-        seed.DraftAmountText = "-12.5";
-        seed.DraftCategory = "测试";
-        seed.SaveCommand.Execute(null);
+        seed.Editor.DraftDescription = "日历明细样张";
+        seed.Editor.DraftAmountText = "-12.5";
+        seed.Editor.DraftCategory = "测试";
+        seed.Editor.SaveCommand.Execute(null);
 
         WaitUntil(() => seed.Entries.Count > 0);
 
@@ -691,6 +717,43 @@ internal static class Program
         Report($"移出后动画组={LAE.LAEngine.ActiveGroupCount}");
 
         AssertNoCollapse(view, "CalenderBill(年)");
+
+        // 日视图的 + 号：默认日期应为当前定位（本用例没有翻页，定位就是今天），
+        // 保存后要落到磁盘；月 / 年视图下这个按钮不显示。
+        vm.ShowMonthCommand.Execute(null);
+        Pump();
+
+        var addBtn = FindField<Button>(view, "AddNewBill")
+            ?? throw new Exception("日历页找不到 + 号按钮");
+
+        if (addBtn.Visibility != Visibility.Collapsed)
+            throw new Exception($"月视图下 + 号按钮应当隐藏, 实际 {addBtn.Visibility}");
+
+        vm.ShowDayCommand.Execute(null);
+        Pump();
+        Layout(view);
+
+        if (addBtn.Visibility != Visibility.Visible)
+            throw new Exception($"日视图下 + 号按钮应当可见, 实际 {addBtn.Visibility}");
+
+        vm.AddCommand.Execute(null);
+        Pump();
+
+        if (vm.Editor.DraftDate?.Date != DateTime.Today)
+            throw new Exception($"日历 + 号没有把草稿日期设为当前定位: {vm.Editor.DraftDate}");
+
+        int todayBefore = CountDayEntries(DateTime.Today);
+
+        vm.Editor.DraftDescription = "日历补记";
+        vm.Editor.DraftAmountText = "-4";
+        vm.Editor.SaveCommand.Execute(null);
+
+        WaitUntil(() => CountDayEntries(DateTime.Today) == todayBefore + 1, rounds: 100);
+
+        Report($"日历页记一笔后 今天记录数 = {CountDayEntries(DateTime.Today)}（原 {todayBefore}）");
+
+        if (CountDayEntries(DateTime.Today) != todayBefore + 1)
+            throw new Exception("日历页记的一笔没有落到磁盘");
 
         DrainSaves();
         CleanupDate(DateTime.Today);
@@ -1252,6 +1315,26 @@ internal static class Program
         if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
     }
 
+    /// <summary>读某一天的账单文件，返回记录条数；文件不存在时返回 0。</summary>
+    private static int CountDayEntries(DateTime date)
+    {
+        var file = Path.Combine(
+            PaperCoin.Core.Constants.BillFolder,
+            date.Year.ToString(), date.Month.ToString(), date.Day.ToString(),
+            "bills.json");
+
+        if (!File.Exists(file)) return 0;
+
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        };
+
+        return System.Text.Json.JsonSerializer
+            .Deserialize<List<PaperCoin.Core.Models.BillEntry>>(File.ReadAllText(file), options)
+            ?.Count ?? 0;
+    }
+
     /// <summary>
     /// 等到条件成立。每轮让出一点真实时间：<c>Pump</c> 本身几乎不耗时，
     /// 空转几百次也等不到一次磁盘 IO 完成；条件成立立刻返回。
@@ -1344,9 +1427,9 @@ internal static class Program
         Layout(view);
 
         vm.AddCommand.Execute(null);
-        vm.DraftDescription = "空状态样张";
-        vm.DraftAmountText = "-1";
-        vm.SaveCommand.Execute(null);
+        vm.Editor.DraftDescription = "空状态样张";
+        vm.Editor.DraftAmountText = "-1";
+        vm.Editor.SaveCommand.Execute(null);
 
         WaitUntil(() => vm.Entries.Count > 0);
 
@@ -1524,9 +1607,9 @@ internal static class Program
         for (int i = 0; i < 3; i++)
         {
             seedVm.AddCommand.Execute(null);
-            seedVm.DraftDescription = $"动效样张 {i + 1}";
-            seedVm.DraftAmountText = $"-{(i + 1) * 7}";
-            seedVm.SaveCommand.Execute(null);
+            seedVm.Editor.DraftDescription = $"动效样张 {i + 1}";
+            seedVm.Editor.DraftAmountText = $"-{(i + 1) * 7}";
+            seedVm.Editor.SaveCommand.Execute(null);
             for (int p = 0; p < 20; p++) Pump();
         }
 
@@ -1611,9 +1694,9 @@ internal static class Program
 
         // 再存一笔：列表会变，但入场不能再放，否则每存一次整屏弹一下
         vm.AddCommand.Execute(null);
-        vm.DraftDescription = "后来的一笔";
-        vm.DraftAmountText = "-9";
-        vm.SaveCommand.Execute(null);
+        vm.Editor.DraftDescription = "后来的一笔";
+        vm.Editor.DraftAmountText = "-9";
+        vm.Editor.SaveCommand.Execute(null);
 
         WaitUntil(() => vm.Entries.Count >= 4);
         Layout(view);
@@ -1755,9 +1838,9 @@ internal static class Program
         for (int i = 0; i < 3; i++)
         {
             seedVm.AddCommand.Execute(null);
-            seedVm.DraftDescription = $"日历动效 {i + 1}";
-            seedVm.DraftAmountText = $"-{(i + 1) * 3}";
-            seedVm.SaveCommand.Execute(null);
+            seedVm.Editor.DraftDescription = $"日历动效 {i + 1}";
+            seedVm.Editor.DraftAmountText = $"-{(i + 1) * 3}";
+            seedVm.Editor.SaveCommand.Execute(null);
             for (int p = 0; p < 20; p++) Pump();
         }
 

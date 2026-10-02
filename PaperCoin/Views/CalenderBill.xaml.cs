@@ -320,6 +320,10 @@ public partial class CalenderBill : UserControl
             .Play();
     }
 
+    /// <summary>+ 号按下的回弹。面板的开合由 <see cref="BillEditorOverlay"/> 负责。</summary>
+    private void AddNewBill_Click(object sender, RoutedEventArgs e)
+        => PlayQElastic(AddNewBillBtnScaleTransform, 1.18, 420);
+
     /// <summary>在可视树中深度优先查找第一个指定类型的子元素</summary>
     private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
     {

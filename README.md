@@ -18,6 +18,7 @@ Windows 桌面记账程序。WPF + .NET 10，单机运行，账单以按日期�
 
 - 日 / 月 / 年三种粒度共用同一个当前定位，切换粒度不会丢掉已经翻到的位置。
 - 上一页 / 下一页的步长跟随当前粒度，日视图走一天、月视图走一月、年视图走一年。
+- 日视图右下角的 ＋ 可以像今日账单那样直接记一笔，草稿日期默认是当前定位。
 - 月视图固定 6×7 网格；有记录的日期带底色，格子里显示当日合计。
 - 年视图展示 12 个月的合计。
 - 明细列表在三种视图下共用，内容分别是当天 / 当月 / 当年的流水。
@@ -49,8 +50,8 @@ PaperCoin/
 │   ├── Converters/                 值转换器
 │   ├── Icon/                       图标资源与 Iconfont.ttf
 │   ├── Themes/                     Dark / Bright / Controls / Generic
-│   ├── ViewModels/                 三个页面的 ViewModel
-│   └── Views/                      三个页面，以及列表入场动效的实现
+│   ├── ViewModels/                 三个页面的 ViewModel，以及两页共用的编辑面板状态
+│   └── Views/                      三个页面、两页共用的浮层编辑面板、列表入场动效
 ├── PaperCoin.Core/                 领域模型与路径常量
 ├── PaperCoin.Service/              配置、主题状态、账单持久化
 ├── tools/UiSmokeTest/              UI 冒烟测试
@@ -90,7 +91,7 @@ dotnet run --project PaperCoin/PaperCoin.csproj
 |------|------|
 | `Config/papercoin-settings.json` | 应用配置（主题、自动启动、自动更新） |
 | `Logs/papercoin-<日期>.log` | 按天滚动的日志，保留 7 份 |
-| `Bills/<年>/<月>/<日>/bills.json` | 当天的全部流水，逐日覆盖写 |
+| `Bills/<年>/<月>/<日>/bills.json` | 当天全部流水。新增或编辑按记录自身的日期定位，与那一天的已有记录合并，不覆盖 |
 
 目录结构本身就是索引：查询直接枚举 `Bills/` 下的年 / 月 / 日目录，没有独立的索引文件。手工增删目录同样能被正确识别。
 

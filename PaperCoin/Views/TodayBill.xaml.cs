@@ -12,16 +12,11 @@ using PaperCoin.ViewModels;
 namespace PaperCoin.Views;
 
 /// <summary>
-/// TodayBill 的视图逻辑。动画目标是可视树对象，所以约定 ViewModel 只翻转 IsEditorOpen 这类布尔状态，由本类按状态播放。
+/// TodayBill 的视图逻辑。动画目标是可视树对象，所以 ViewModel 只翻转布尔状态，由本类按状态播放；
+/// 新增 / 编辑面板是共享的 <see cref="BillEditorOverlay"/>。
 /// </summary>
 public partial class TodayBill : UserControl
 {
-    // ---- 编辑面板 ----
-    private const double PanelAnimationMs = 200;
-
-    /// <summary>面板收起时下移的距离。用固定像素：打开动画发生在测量之前，那时 ActualHeight 还是 0。</summary>
-    private const double PanelHiddenOffset = 300;
-
     // ---- 流水卡片 ----
     private const double RowPressMs = 80;
     private const double RowPressScale = 0.97;
@@ -56,7 +51,6 @@ public partial class TodayBill : UserControl
     /// </summary>
     internal const double MaxHoverScale = RowHoverScale;
 
-    private bool _playingEditorPanel;
     private bool _rowPressed;
 
     /// <summary>卡片入场（上浮 + 淡入，按顺序错开），实现见 <see cref="CardListEntrance"/></summary>
@@ -100,14 +94,11 @@ public partial class TodayBill : UserControl
 
         // 首屏为空（全新安装）时提示也要有一次入场
         RequestEmptyHint();
-
-        if (Vm?.IsEditorOpen == true)
-        {
-            EditorLayer.Visibility = Visibility.Visible;
-            EditorTranslate.Y = 0;
-            EditorScrim.Opacity = 0.35;
-        }
     }
+
+    /// <summary>+ 号按下的回弹。面板的开合由 <see cref="BillEditorOverlay"/> 负责。</summary>
+    private void AddNewBill_Click(object sender, RoutedEventArgs e)
+        => PlayQElastic(AddNewBillBtnScaleTransform, 1.18, 420);
 
     /// <summary>
     /// 解除对 ViewModel 的事件订阅。ViewModel 以 Transient 注册而页面被 MainWindow 长期缓存，不退订会一直引用住旧实例。
@@ -153,28 +144,18 @@ public partial class TodayBill : UserControl
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         // 列表空/非空切换：空了播空提示入场，有数据了播卡片入场
-        if (e.PropertyName == nameof(TodayBillViewModel.IsEmpty))
+        if (e.PropertyName != nameof(TodayBillViewModel.IsEmpty)) return;
+
+        if (Vm?.IsEmpty == true)
         {
-            if (Vm?.IsEmpty == true)
-            {
-                RequestEmptyHint();
-            }
-            else
-            {
-                // 复位，下次真的空了还能再播
-                _emptyHintShown = false;
-                _cardEntrance.TryPlay();
-            }
-
-            return;
+            RequestEmptyHint();
         }
-
-        if (e.PropertyName != nameof(TodayBillViewModel.IsEditorOpen)) return;
-
-        if (Vm?.IsEditorOpen == true)
-            PlayEditorOpen();
-        else if (EditorLayer.Visibility == Visibility.Visible)
-            PlayEditorClose();
+        else
+        {
+            // 复位，下次真的空了还能再播
+            _emptyHintShown = false;
+            _cardEntrance.TryPlay();
+        }
     }
 
     // ---- 删除回流 ----
@@ -318,62 +299,6 @@ public partial class TodayBill : UserControl
         }), DispatcherPriority.Render);
     }
 
-    // ---- 编辑面板动效 ----
-
-    private void PlayEditorOpen()
-    {
-        if (_playingEditorPanel) return;
-        _playingEditorPanel = true;
-
-        PlayQElastic(AddNewBillBtnScaleTransform, 1.18, 420);
-
-        EditorLayer.Visibility = Visibility.Visible;
-        EditorScrim.Opacity = 0;
-        EditorTranslate.Y = 24;
-
-        // Visibility 刚从 Collapsed 切过来的元素本帧还没有可用的渲染变换，动画要等布局跑完
-        Dispatcher.BeginInvoke(new Action(() =>
-        {
-            // 收尾用 OutBack 制造轻微回弹；起始位移仅 24px，超调量不会溢出被裁切
-            LA.Builder().Ease(Easing.OutBack(1.4))
-                .Move(EditorTranslate, 0, 0, PanelAnimationMs)
-                .Play();
-
-            LA.Builder().Ease(Easing.OutCubic)
-                .Opacity(EditorScrim, 0.35, PanelAnimationMs)
-                .OnComplete(() =>
-                {
-                    _playingEditorPanel = false;
-
-                    // 焦点直接给描述框：点 + 号就是要打字，不必让用户再点一次输入框
-                    DescriptionBox.Focus();
-                    Keyboard.Focus(DescriptionBox);
-                })
-                .Play();
-        }), DispatcherPriority.Render);
-    }
-
-    private void PlayEditorClose()
-    {
-        if (_playingEditorPanel) return;
-        _playingEditorPanel = true;
-
-        // 关闭不做回弹
-        LA.Builder().Ease(Easing.OutPow(2))
-            .Move(EditorTranslate, 0, PanelHiddenOffset, PanelAnimationMs)
-            .Play();
-
-        LA.Builder().Ease(Easing.OutCubic)
-            .Opacity(EditorScrim, 0, PanelAnimationMs)
-            .OnComplete(() =>
-            {
-                // 动画结束后必须真正收起可视树，否则这块全屏遮罩会继续拦截鼠标，列表点不动
-                EditorLayer.Visibility = Visibility.Collapsed;
-                _playingEditorPanel = false;
-            })
-            .Play();
-    }
-
     // ---- 流水卡片动效 ----
 
     /// <summary>指针进入：轻微抬起</summary>
@@ -457,36 +382,6 @@ public partial class TodayBill : UserControl
                 : LogicalTreeHelper.GetParent(source);
         }
         return false;
-    }
-
-    // ---- 交互 ----
-
-    /// <summary>点遮罩即取消；只处理落在遮罩自身的点击，面板内部的点击由面板吞掉。</summary>
-    private void EditorScrim_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        if (ReferenceEquals(e.OriginalSource, EditorScrim))
-            Vm?.CancelCommand.Execute(null);
-    }
-
-    /// <summary>
-    /// 面板内快捷键：Esc 取消，Ctrl+Enter 保存。挂在 EditorPanel 而非 UserControl 上，只在按键经过面板时生效。
-    /// </summary>
-    private void EditorPanel_PreviewKeyDown(object sender, KeyEventArgs e)
-    {
-        if (Vm is null) return;
-
-        if (e.Key == Key.Escape)
-        {
-            Vm.CancelCommand.Execute(null);
-            e.Handled = true;
-        }
-        else if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
-        {
-            if (Vm.SaveCommand.CanExecute(null))
-                Vm.SaveCommand.Execute(null);
-
-            e.Handled = true;
-        }
     }
 
     // ---- 动效基元 ----
