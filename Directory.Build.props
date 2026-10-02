@@ -1,0 +1,22 @@
+<Project>
+
+  <!--
+    产品版本的单一来源，所有自有程序集都从这里取版本号。
+
+    这不只是"显示用的版本号"：MSI 覆盖文件时比较的是文件版本，新版本必须严格大于已安装的版本，
+    相等就直接跳过。曾经 PaperCoin.Core 与 PaperCoin.Service 没设版本（都是 1.0.0.0），
+    升级安装后安装目录里留住了旧的 Service.dll，而新的 PaperCoin.dll 调用它里面不存在的方法 ——
+    一按 + 号就以 MissingMethodException 崩掉。版本不递增 = 旧文件不会被替换。
+
+    LivelyAnimationEngine 自带 <Version>，项目级属性优先，不会被这里覆盖。
+
+    发布新版本时同步改两处：
+      1. 本文件的 <Version>
+      2. PaperCoin.Setup/PaperCoin.Setup.vdproj 的 ProductVersion，并换一个新的 ProductCode
+    Constants.AppVersion 不用改，它从程序集版本读。
+  -->
+  <PropertyGroup>
+    <Version>1.2.2</Version>
+  </PropertyGroup>
+
+</Project>

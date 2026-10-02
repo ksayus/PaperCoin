@@ -28,6 +28,10 @@ project.fragment.lock.json
 *.swp
 *~
 
+# Visual Studio 打开旧项目失败时留下的迁移日志
+UpgradeLog*.htm
+UpgradeLog*.xml
+
 .vscode/*
 !.vscode/launch.json
 !.vscode/tasks.json
@@ -56,9 +60,22 @@ papercoin-settings.json
 papercoin-*.log
 
 # ---------------------------------------------------------------------------
+# 安装项目输出
+# 由 Visual Studio 的 .vdproj 生成（MSBuild 不支持该类型），不入库。
+# ---------------------------------------------------------------------------
+PaperCoin.Setup/Debug/
+PaperCoin.Setup/Release/
+
+# ---------------------------------------------------------------------------
 # LAE 动画引擎
-# 本地放置的独立项目（含自己的 .slnx / README / LICENSE），不入库。
-# PaperCoin.csproj 与 PaperCoin.slnx 都按 LivelyAnimationEngine/LAE/
+# 本地放置的独立项目（含自己的解决方案 / README / LICENSE），不入库。
+# PaperCoin.csproj 与 PaperCoin.sln 都按 LivelyAnimationEngine/LAE/
 # LivelyAnimationEngine.csproj 这个相对路径引用它，克隆后需自行补齐。
 # ---------------------------------------------------------------------------
 /LivelyAnimationEngine/
+
+# ---------------------------------------------------------------------------
+# 本地笔记
+# 开发过程与会话记录，只留在本机，不入库。
+# ---------------------------------------------------------------------------
+/SESSION-NOTES.md

@@ -72,15 +72,13 @@
                                  BorderBrush="{DynamicResource ColorCardBorder}"
                                  BorderThickness="1"/>
 
-                        <TextBlock Text="分类（可留空）" FontSize="11" Margin="0,12,0,4"
+                        <TextBlock Text="分类（可选已有的，也可直接输入新的）" FontSize="11" Margin="0,12,0,4"
                                    Foreground="{DynamicResource ColorTextSecondary}"/>
-                        <TextBox Text="{Binding DraftCategory, UpdateSourceTrigger=PropertyChanged}"
-                                 Padding="8,6" FontSize="13"
-                                 CaretBrush="{DynamicResource ColorTextTitle}"
-                                 Foreground="{DynamicResource ColorTextTitle}"
-                                 Background="{DynamicResource ColorCardBackground}"
-                                 BorderBrush="{DynamicResource ColorCardBorder}"
-                                 BorderThickness="1"/>
+                        <ComboBox x:Name="CategoryBox"
+                                  Style="{DynamicResource ComboBoxEditableThemed}"
+                                  IsEditable="True"
+                                  ItemsSource="{Binding Categories}"
+                                  Text="{Binding DraftCategory, UpdateSourceTrigger=PropertyChanged}"/>
 
                         <TextBlock Text="日期（可改成以前的任意一天）" FontSize="11"
                                    Margin="0,12,0,4"

@@ -391,6 +391,103 @@
             </Setter.Value>
         </Setter>
     </Style>
+
+    <!-- 记账面板的分类下拉框：可编辑。IsEditable 依赖模板里的 PART_EditableTextBox，
+         少了这个具名部件会静默退化成只读下拉，所以不能只在 ComboBoxThemed 上设 IsEditable。 -->
+    <Style x:Key="ComboArrowToggle" TargetType="{x:Type ToggleButton}">
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="ClickMode" Value="Press"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type ToggleButton}">
+                    <Border Background="Transparent" Padding="8,0,10,0">
+                        <TextBlock Text="⌄" FontSize="12" Margin="0,-4,0,0"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource ColorTextSecondary}"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="ComboBoxEditableThemed" TargetType="{x:Type ComboBox}">
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Foreground" Value="{DynamicResource ColorTextTitle}"/>
+        <Setter Property="ItemContainerStyle" Value="{DynamicResource ComboItem}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="{x:Type ComboBox}">
+                    <Grid>
+                        <Border x:Name="Bd" CornerRadius="6"
+                                Background="{DynamicResource ColorCardBackground}"
+                                BorderBrush="{DynamicResource ColorCardBorder}"
+                                BorderThickness="1">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 可编辑时的输入区，ComboBox 按这个名字找它 -->
+                                <TextBox x:Name="PART_EditableTextBox" Grid.Column="0"
+                                         Margin="8,6,0,6"
+                                         Visibility="Hidden"
+                                         Background="Transparent" BorderThickness="0"
+                                         Foreground="{DynamicResource ColorTextTitle}"
+                                         CaretBrush="{DynamicResource ColorTextTitle}"
+                                         VerticalContentAlignment="Center"/>
+
+                                <!-- 不可编辑时显示选中项 -->
+                                <ContentPresenter x:Name="ContentSite" Grid.Column="0"
+                                                  Margin="10,0,0,0"
+                                                  VerticalAlignment="Center"
+                                                  IsHitTestVisible="False"
+                                                  Content="{TemplateBinding SelectionBoxItem}"
+                                                  ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
+
+                                <ToggleButton x:Name="DropDownToggle" Grid.Column="1"
+                                              Style="{DynamicResource ComboArrowToggle}"
+                                              IsChecked="{Binding IsDropDownOpen,
+                                                          RelativeSource={RelativeSource TemplatedParent},
+                                                          Mode=TwoWay}"/>
+                            </Grid>
+                        </Border>
+
+                        <Popup x:Name="PART_Popup"
+                               IsOpen="{TemplateBinding IsDropDownOpen}"
+                               Placement="Bottom"
+                               AllowsTransparency="True"
+                               PopupAnimation="Fade"
+                               Focusable="False">
+                            <Border Margin="0,4,0,0" CornerRadius="6" Padding="4"
+                                    MinWidth="{Binding ActualWidth,
+                                               RelativeSource={RelativeSource TemplatedParent}}"
+                                    MaxHeight="180"
+                                    Background="{DynamicResource ColorMainContentArea}"
+                                    BorderBrush="{DynamicResource ColorCardBorder}"
+                                    BorderThickness="1">
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <ItemsPresenter/>
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
+
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsEditable" Value="True">
+                            <Setter TargetName="PART_EditableTextBox" Property="Visibility" Value="Visible"/>
+                            <Setter TargetName="ContentSite" Property="Visibility" Value="Hidden"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush"
+                                    Value="{DynamicResource ColorAddNewBillBtn}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- 滚动条：全应用统一的装饰外观。
 
          隐式样式（无 x:Key），对本程序里所有 ScrollBar 生效，包括下拉框弹出的那一层。

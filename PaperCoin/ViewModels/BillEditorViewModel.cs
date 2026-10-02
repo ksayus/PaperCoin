@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -38,6 +39,12 @@ public partial class BillEditorViewModel : ObservableObject
 
     public ICommand SaveCommand { get; }
     public ICommand CancelCommand { get; }
+
+    /// <summary>
+    /// 下拉框里的分类候选，来自账单里已经用过的分类。面板每次打开时刷新，写盘成功后也再刷一次，
+    /// 用户直接输入的新分类因此马上就能在下次选择时看到。
+    /// </summary>
+    public ObservableCollection<string> Categories { get; } = [];
 
     private bool _isOpen;
 
@@ -145,6 +152,9 @@ public partial class BillEditorViewModel : ObservableObject
         // 草稿被赋成相同值时 SetProperty 不会触发 Validate，这里需显式校验一次
         Validate();
 
+        // 候选只是辅助信息，取候选失败不该拖住面板打开，所以这里不等它
+        _ = RefreshCategoriesAsync();
+
         IsOpen = true;
     }
 
@@ -163,6 +173,8 @@ public partial class BillEditorViewModel : ObservableObject
         DraftDate = entry.Date.ToDateTime(TimeOnly.MinValue);
 
         Validate();
+
+        _ = RefreshCategoriesAsync();
 
         IsOpen = true;
     }
@@ -227,8 +239,37 @@ public partial class BillEditorViewModel : ObservableObject
             return;
         }
 
+        // 新分类此刻已经进了账单，刷新候选让它马上可选
+        await RefreshCategoriesAsync();
+
         if (Saved is not null)
             await Saved(entry);
+    }
+
+    /// <summary>
+    /// 重新拉取分类候选。读不到时保持原样，用户照样可以手打分类：
+    /// 候选列表是辅助信息，不该因为一次读取失败就打断记账。
+    /// </summary>
+    private async Task RefreshCategoriesAsync()
+    {
+        IReadOnlyList<string> categories;
+        try
+        {
+            categories = await _repository.GetCategoriesAsync();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return;
+        }
+
+        await UiThread.RunAsync(() =>
+        {
+            Categories.Clear();
+            foreach (var category in categories)
+                Categories.Add(category);
+
+            return Task.CompletedTask;
+        });
     }
 
     /// <summary>

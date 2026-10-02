@@ -21,12 +21,6 @@
         }
         "Entry"
         {
-        "MsmKey" = "8:_A704438B054B434580805F7A8B19A7C5"
-        "OwnerKey" = "8:_UNDEFINED"
-        "MsmSig" = "8:_UNDEFINED"
-        }
-        "Entry"
-        {
         "MsmKey" = "8:_FDD076A536E94D1BB1561E43D48FFBE7"
         "OwnerKey" = "8:_UNDEFINED"
         "MsmSig" = "8:_UNDEFINED"
@@ -140,7 +134,7 @@
         {
             "{3C67513D-01DD-4637-8A68-80971EB9504F}:_4DBDB701BA6347F082A9660722DB8FA6"
             {
-            "DefaultLocation" = "8:[ProgramFilesFolder][Manufacturer]\\[ProductName]"
+            "DefaultLocation" = "8:[LocalAppDataFolder]PaperCoin"
             "Name" = "8:#1925"
             "AlwaysCreate" = "11:FALSE"
             "Condition" = "8:"
@@ -178,6 +172,13 @@
         }
         "Locator"
         {
+            "{CF66B7F7-B7DA-4B08-A67A-233430638C9C}:_BC18A4ED44D94FFF9575752FB7446B9D"
+            {
+            "Root" = "3:2"
+            "RegKey" = "8:Software\\Ksayus\\PaperCoin"
+            "Value" = "8:InstallDir"
+            "Property" = "8:TARGETDIR"
+            }
         }
         "MsiBootstrapper"
         {
@@ -188,15 +189,15 @@
         {
         "Name" = "8:Microsoft Visual Studio"
         "ProductName" = "8:PaperCoin"
-        "ProductCode" = "8:{EBD30250-E0BA-45D9-BBD8-7681AF5FEEA0}"
-        "PackageCode" = "8:{5E244D95-668E-4058-AF49-2FCB81CF1258}"
+        "ProductCode" = "8:{33F504D6-3AEE-4244-A77D-3F5E89CC44D2}"
+        "PackageCode" = "8:{EC02AE33-BF7D-4110-A2F7-3D28FAA8C30B}"
         "UpgradeCode" = "8:{CDCA03BC-FE8F-4BCB-97E9-44EB1DFAA0C2}"
         "AspNetVersion" = "8:2.0.50727.0"
         "RestartWWWService" = "11:FALSE"
-        "RemovePreviousVersions" = "11:FALSE"
+        "RemovePreviousVersions" = "11:TRUE"
         "DetectNewerInstalledVersion" = "11:TRUE"
         "InstallAllUsers" = "11:FALSE"
-        "ProductVersion" = "8:1.0.0"
+        "ProductVersion" = "8:1.2.2"
         "Manufacturer" = "8:Ksayus"
         "ARPHELPTELEPHONE" = "8:"
         "ARPHELPLINK" = "8:"
@@ -206,7 +207,7 @@
         "Keywords" = "8:SoftwareOfBill"
         "ARPCOMMENTS" = "8:"
         "ARPURLINFOABOUT" = "8:"
-        "ARPPRODUCTICON" = "8:"
+        "ARPPRODUCTICON" = "8:_66C5003560F24D4DBEC64F661248A64B"
         "ARPIconIndex" = "3:0"
         "SearchPath" = "8:"
         "UseSystemSearchPath" = "11:TRUE"
@@ -679,41 +680,6 @@
                             }
                         }
                     }
-                    "{688940B3-5CA9-4162-8DEE-2993FA9D8CBC}:_86B58B8D2BC64276A35E2809217AD3EA"
-                    {
-                    "Sequence" = "3:200"
-                    "DisplayName" = "8:安装文件夹"
-                    "UseDynamicProperties" = "11:TRUE"
-                    "IsDependency" = "11:FALSE"
-                    "SourcePath" = "8:<VsdDialogDir>\\VsdFolderDlg.wid"
-                        "Properties"
-                        {
-                            "BannerBitmap"
-                            {
-                            "Name" = "8:BannerBitmap"
-                            "DisplayName" = "8:#1001"
-                            "Description" = "8:#1101"
-                            "Type" = "3:8"
-                            "ContextData" = "8:Bitmap"
-                            "Attributes" = "3:4"
-                            "Setting" = "3:1"
-                            "UsePlugInResources" = "11:TRUE"
-                            }
-                            "InstallAllUsersVisible"
-                            {
-                            "Name" = "8:InstallAllUsersVisible"
-                            "DisplayName" = "8:#1059"
-                            "Description" = "8:#1159"
-                            "Type" = "3:5"
-                            "ContextData" = "8:1;True=1;False=0"
-                            "Attributes" = "3:0"
-                            "Setting" = "3:0"
-                            "Value" = "3:1"
-                            "DefaultValue" = "3:1"
-                            "UsePlugInResources" = "11:TRUE"
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -722,34 +688,6 @@
         }
         "ProjectOutput"
         {
-            "{5259A561-127C-4D43-A0A1-72F10C7B3BF8}:_A704438B054B434580805F7A8B19A7C5"
-            {
-            "SourcePath" = "8:..\\PaperCoin\\obj\\Release\\net10.0-windows\\PaperCoin.dll"
-            "TargetName" = "8:"
-            "Tag" = "8:"
-            "Folder" = "8:_4DBDB701BA6347F082A9660722DB8FA6"
-            "Condition" = "8:"
-            "Transitive" = "11:FALSE"
-            "Vital" = "11:TRUE"
-            "ReadOnly" = "11:FALSE"
-            "Hidden" = "11:FALSE"
-            "System" = "11:FALSE"
-            "Permanent" = "11:FALSE"
-            "SharedLegacy" = "11:FALSE"
-            "PackageAs" = "3:1"
-            "Register" = "3:1"
-            "Exclude" = "11:FALSE"
-            "IsDependency" = "11:FALSE"
-            "IsolateTo" = "8:"
-            "ProjectOutputGroupRegister" = "3:1"
-            "OutputConfiguration" = "8:Release|Any CPU"
-            "OutputGroupCanonicalName" = "8:Built"
-            "OutputProjectGuid" = "8:{6F6DABAD-E954-5910-11D9-F2BA8824AD59}"
-            "ShowKeyOutput" = "11:TRUE"
-                "ExcludeFilters"
-                {
-                }
-            }
             "{5259A561-127C-4D43-A0A1-72F10C7B3BF8}:_FDD076A536E94D1BB1561E43D48FFBE7"
             {
             "SourcePath" = "8:..\\PaperCoin\\obj\\Release\\net10.0-windows\\apphost.exe"

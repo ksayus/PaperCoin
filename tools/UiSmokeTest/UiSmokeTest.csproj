@@ -13,4 +13,11 @@
   <ItemGroup>
     <ProjectReference Include="..\..\PaperCoin\PaperCoin.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- 第 19 项要在"程序目录"里找到这个图标：Content 的复制元数据不跨项目传递，
+         所以这里显式带一份到测试的 bin 下。 -->
+    <Content Include="..\..\PaperCoin\Icon\papercoin-icon.ico"
+             Link="papercoin-icon.ico"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

@@ -8,7 +8,7 @@
          光看 U+E649 这种编号无法反查它长什么样，所以码位与语义的对应关系集中写在这里。
          换图标时只改这个文件，各 View 都通过 DynamicResource 引用。 -->
 
-    <!-- 已核对的字形清单，Iconfont.ttf 里全部 18 个码位。
+    <!-- 已核对的字形清单，Iconfont.ttf 里全部 19 个码位。
 
          核对方式：用 GDI+ 的 PrivateFontCollection 按文件路径加载这个 TTF，逐个码位画出来看。
          不要用 WPF 的 pack 资源字体去画，无窗口的测试宿主里解析不出来，所有图标会画成缺字方框。
@@ -55,6 +55,9 @@
 
     <!-- 文件夹 / 数据目录 -->
     <sys:String x:Key="IconFolder">&#xe600;</sys:String>
+
+    <!-- 开机自动启动 / 电源 -->
+    <sys:String x:Key="IconPower">&#xe60c;</sys:String>
 
     <!-- 主题 / 调色盘 -->
     <sys:String x:Key="IconTheme">&#xeaec;</sys:String>

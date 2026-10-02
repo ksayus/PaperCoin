@@ -24,4 +24,12 @@
     <ProjectReference Include="..\PaperCoin.Core\PaperCoin.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- ShortcutRepair 要把图标按文件路径喂给 IShellLink，装成内嵌资源它才跟着这个程序集走。
+         不复制成输出文件：安装项目那边已经把它当独立 File 节点收进包里，
+         再声明成 Content 会在 MSI 的 File 表里出现两份同名文件。 -->
+    <EmbeddedResource Include="..\PaperCoin\Icon\papercoin-icon.ico"
+                      LogicalName="PaperCoin.Icon.papercoin-icon.ico" />
+  </ItemGroup>
+
 </Project>

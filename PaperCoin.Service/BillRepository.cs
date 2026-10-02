@@ -100,6 +100,29 @@ public class BillRepository
         }
     }
 
+    /// <summary>
+    /// 账单里出现过的全部分类，按用过的次数从多到少排，次数相同按名称排。
+    /// 汇总自内存索引，不额外读盘；同名分类只保留首次出现时的写法。
+    /// </summary>
+    public async Task<IReadOnlyList<string>> GetCategoriesAsync(CancellationToken ct = default)
+    {
+        await EnsureIndexAsync(ct);
+
+        lock (_index)
+        {
+            return _index.Values
+                .SelectMany(list => list)
+                .Select(e => e.Category)
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Select(c => c!.Trim())
+                .GroupBy(c => c, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(g => g.Count())
+                .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.Key)
+                .ToList();
+        }
+    }
+
     // ---- 写入 ----
 
     /// <summary>

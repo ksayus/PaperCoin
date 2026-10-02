@@ -1,10 +1,13 @@
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Win32;
 using PaperCoin.Controls;
 using PaperCoin.Service;
 using PaperCoin.Services;
@@ -63,6 +66,11 @@ internal static class Program
             failures += Check("12. 卡片入场与删除回流", TestCardMotion);
             failures += Check("13. 日历明细卡片入场", TestCalendarEntrance);
             failures += Check("14. 日期选择器跟着主题走", TestDatePickerTheme);
+            failures += Check("15. 主题切换的颜色过渡", TestThemeTransition);
+            failures += Check("16. 自有程序集带产品版本", TestAssemblyVersions);
+            failures += Check("17. 安装位置记录", TestInstallLocation);
+            failures += Check("18. View 引用的图标资源键都已定义", TestIconReferences);
+            failures += Check("19. 快捷方式图标修正", TestShortcutRepair);
         });
 
         Console.WriteLine();
@@ -152,6 +160,207 @@ internal static class Program
                 throw new Exception($"矢量图标 {key} 是空几何, 画不出任何东西");
 
             Report($"{key,-16} 矢量几何 bounds={geometry.Bounds}");
+        }
+    }
+
+    // ---- 18. View 引用的图标键 ----
+
+    /// <summary>
+    /// View 里的图标是 DynamicResource 引用：键写错不报错，只渲染成空白，
+    /// 和缺字形一样安静。第 2 项只能验证表里有的码位，管不到引用侧，
+    /// 所以这里把 View 里出现的每个图标键与 AppIcons 的定义对一遍。
+    /// 字体族键 <c>Iconfont</c> 也在资源里，但不是图标，用首字母大写把它排除。
+    /// </summary>
+    private static void TestIconReferences()
+    {
+        var icons = LoadDict("/Icon/AppIcons.xaml");
+        var defined = icons.Keys.Cast<object>().Select(k => k.ToString()!).ToHashSet();
+
+        var root = RepoRoot();
+        if (root is null) throw new Exception("找不到仓库根");
+
+        var reference = new Regex(@"\{(?:Dynamic|Static)Resource\s+(Icon[A-Z][A-Za-z0-9_]*)\s*\}");
+
+        var found = new List<(string Key, string File, int Line)>();
+        foreach (var file in Directory.EnumerateFiles(
+                     Path.Combine(root, "PaperCoin"), "*.xaml", SearchOption.AllDirectories))
+        {
+            var text = File.ReadAllText(file);
+            foreach (Match m in reference.Matches(text))
+            {
+                var line = text.Take(m.Index).Count(c => c == '\n') + 1;
+                found.Add((m.Groups[1].Value, Path.GetFileName(file), line));
+            }
+        }
+
+        Report($"View 里引用图标 {found.Count} 处, AppIcons 定义 {defined.Count} 个");
+
+        var missing = found.Where(f => !defined.Contains(f.Key)).ToList();
+        if (missing.Count > 0)
+        {
+            throw new Exception(
+                "引用未定义的图标键: " +
+                string.Join(", ", missing.Select(m => $"{m.File}:{m.Line} {m.Key}")));
+        }
+
+        // View 里确实用到了图标才算这条防线成立，别因为正则失效而永远通过。
+        if (found.Count == 0) throw new Exception("没有扫描到任何图标引用, 正则可能已失效");
+    }
+
+    // ---- 19. 快捷方式图标修正 ----
+
+    [ComImport]
+    [Guid("00021401-0000-0000-C000-000000000046")]
+    private class ShellLinkTestObject
+    {
+    }
+
+    [ComImport]
+    [Guid("000214F9-0000-0000-C000-000000000046")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellLinkTest
+    {
+        void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszFile, int cch, IntPtr pfd, uint fFlags);
+        void GetIDList(out IntPtr ppidl);
+        void SetIDList(IntPtr pidl);
+        void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszName, int cch);
+        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+        void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszDir, int cch);
+        void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
+        void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszArgs, int cch);
+        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+        void GetHotkey(out short pwHotkey);
+        void SetHotkey(short wHotkey);
+        void GetShowCmd(out int piShowCmd);
+        void SetShowCmd(int iShowCmd);
+        void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder pszIconPath, int cch, out int piIcon);
+        void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
+        void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string pszPathRel, uint dwReserved);
+        void Resolve(IntPtr hwnd, uint fFlags);
+        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string pszFile);
+    }
+
+    [ComImport]
+    [Guid("0000010b-0000-0000-C000-000000000046")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IPersistFileTest
+    {
+        void GetClassID(out Guid pClassID);
+        [PreserveSig]
+        int IsDirty();
+        void Load([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, uint dwMode);
+        void Save([MarshalAs(UnmanagedType.LPWStr)] string? pszFileName, [MarshalAs(UnmanagedType.Bool)] bool fRemember);
+        void SaveCompleted([MarshalAs(UnmanagedType.LPWStr)] string pszFileName);
+        void GetCurFile([MarshalAs(UnmanagedType.LPWStr)] out string ppszFileName);
+    }
+
+    private static string ReadShortcutIcon(string lnkPath)
+    {
+        var link = (IShellLinkTest)new ShellLinkTestObject();
+        ((IPersistFileTest)link).Load(lnkPath, 0);
+        var buffer = new System.Text.StringBuilder(260);
+        link.GetIconLocation(buffer, buffer.Capacity, out _);
+        return buffer.ToString();
+    }
+
+    private static string ReadShortcutTarget(string lnkPath)
+    {
+        var link = (IShellLinkTest)new ShellLinkTestObject();
+        ((IPersistFileTest)link).Load(lnkPath, 0);
+        var buffer = new System.Text.StringBuilder(260);
+        link.GetPath(buffer, buffer.Capacity, IntPtr.Zero, 0);
+        return buffer.ToString();
+    }
+
+    /// <summary>
+    /// 安装包装出来的快捷方式图标是坏的（MSI Icon 表放的是 .ico 字节却命名成 .exe），
+    /// 由 <see cref="PaperCoin.Service.ShortcutRepair"/> 在启动时补正。
+    /// 这里造一个图标指向别处的快捷方式，验证它真的被改对，并且第二次调用不再写盘。
+    /// </summary>
+    private static void TestShortcutRepair()
+    {
+        // 修正逻辑认的图标：优先程序目录里那份，没有就从内嵌资源落盘。
+        var iconPath = PaperCoin.Service.ShortcutRepair.EnsureIconFile();
+        if (!File.Exists(iconPath))
+            throw new Exception($"图标文件没落盘: {iconPath}");
+        Report($"使用的图标文件 = {iconPath} ({new FileInfo(iconPath).Length} 字节)");
+
+        var dir = Path.Combine(Path.GetTempPath(), "PaperCoinShortcutTest");
+        Directory.CreateDirectory(dir);
+        var lnk = Path.Combine(dir, "PaperCoin.lnk");
+        if (File.Exists(lnk)) File.Delete(lnk);
+
+        try
+        {
+            // 造一个图标指向别处的快捷方式，模拟安装包留下的坏状态。
+            // 目标特意设成"不是本程序"的值：修完之后目标必须变成本程序，
+            // 绝不能变成图标文件的路径（实测踩过，那样快捷方式点不开程序）。
+            var bogus = Path.Combine(dir, "bogus.exe");
+            var originalTarget = Path.Combine(dir, "PaperCoinTarget.exe");
+            var link = (IShellLinkTest)new ShellLinkTestObject();
+            link.SetPath(originalTarget);
+            link.SetIconLocation(bogus, 0);
+            ((IPersistFileTest)link).Save(lnk, true);
+
+            Report($"修正前 IconLocation = {ReadShortcutIcon(lnk)}");
+            Report($"修正前 Target       = {ReadShortcutTarget(lnk)}");
+            if (ReadShortcutIcon(lnk) != bogus)
+                throw new Exception("测试前置失败：快捷方式图标没被设成伪造值");
+
+            var changed = PaperCoin.Service.ShortcutRepair.Repair(lnk);
+            var after = ReadShortcutIcon(lnk);
+            var targetAfter = ReadShortcutTarget(lnk);
+            var expectedTarget = Path.Combine(AppContext.BaseDirectory, "PaperCoin.exe");
+            Report($"Repair 返回 = {changed}");
+            Report($"修正后 IconLocation = {after}");
+            Report($"修正后 Target       = {targetAfter}");
+
+            if (!changed) throw new Exception("图标是错的，Repair 却没改写");
+            if (!string.Equals(after, iconPath, StringComparison.OrdinalIgnoreCase))
+                throw new Exception($"修正后的图标不对: {after} != {iconPath}");
+            if (!string.Equals(targetAfter, expectedTarget, StringComparison.OrdinalIgnoreCase))
+                throw new Exception($"修正后的目标不对: {targetAfter} != {expectedTarget}");
+
+            // 内嵌资源得是同一个图标，否则打包时漏更新就看不出来。
+            var embedded = typeof(PaperCoin.Service.ShortcutRepair).Assembly
+                .GetManifestResourceNames()
+                .FirstOrDefault(n => n.EndsWith("papercoin-icon.ico", StringComparison.OrdinalIgnoreCase));
+            if (embedded is null) throw new Exception("程序集里没有内嵌图标资源");
+            Report($"内嵌图标资源 = {embedded}");
+            using (var s = typeof(PaperCoin.Service.ShortcutRepair).Assembly.GetManifestResourceStream(embedded)!)
+            {
+                if (s.Length != new FileInfo(iconPath).Length)
+                    throw new Exception($"内嵌图标大小 {s.Length} 与落盘文件不一致");
+            }
+
+            // 幂等：图标已经对了就不该再写盘
+            if (PaperCoin.Service.ShortcutRepair.Repair(lnk))
+                throw new Exception("图标已经正确，Repair 却又写了一次（不幂等）");
+            Report("第二次调用未写盘（幂等）");
+
+            // 文件不存在时不该抛异常
+            if (PaperCoin.Service.ShortcutRepair.Repair(Path.Combine(dir, "不存在.lnk")))
+                throw new Exception("对不存在的快捷方式返回了 true");
+            Report("不存在的快捷方式返回 false，未抛异常");
+
+            // 顺带只读核对真实的桌面快捷方式：它是开发目录加载的，AppContext.BaseDirectory
+            // 不是它的程序目录，所以这里绝不能调 Repair（会把人家的桌面改成测试宿主的路径）。
+            var desktopLnk = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                "PaperCoin.lnk");
+            if (File.Exists(desktopLnk))
+            {
+                Report($"桌面快捷方式图标(只读) = {ReadShortcutIcon(desktopLnk)}");
+            }
+            else
+            {
+                Report("本机没有桌面快捷方式（正常，未安装）");
+            }
+        }
+        finally
+        {
+            if (File.Exists(lnk)) File.Delete(lnk);
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
         }
     }
 
@@ -459,6 +668,19 @@ internal static class Program
                 throw new Exception($"{name} 尺寸异常: {box.ActualWidth:0.#}x{box.ActualHeight:0.#}");
         }
 
+        // 分类框是可编辑下拉框。IsEditable 依赖模板里的 PART_EditableTextBox，少了这个具名部件
+        // 会静默退化成只读下拉，所以只断言 IsEditable 抓不住这种情况，必须查模板部件。
+        var categoryBox = FindField<ComboBox>(overlay, "CategoryBox")
+            ?? throw new Exception("找不到分类下拉框");
+
+        if (!categoryBox.IsEditable)
+            throw new Exception("分类下拉框不可编辑");
+
+        if (categoryBox.Template.FindName("PART_EditableTextBox", categoryBox) is not TextBox)
+            throw new Exception("分类下拉框模板缺少 PART_EditableTextBox（IsEditable 会静默失效）");
+
+        Report($"分类框 可编辑={categoryBox.IsEditable} 候选数={categoryBox.Items.Count}");
+
         // 日期框必须挂上主题模板：默认模板是白底，配上本项目接近白的前景就是
         // 白底白字。模板本身由第 14 项取像素验证，这里验证它被用上了。
         var datePicker = FindAllCore<DatePicker>(view).FirstOrDefault()
@@ -571,6 +793,44 @@ internal static class Program
         if (pastAfter != pastBefore + 1)
             throw new Exception(
                 $"往同一天记第二笔覆盖了既有记录: {pastDate:yyyy-MM-dd} 原有 {pastBefore} 条, 现在 {pastAfter} 条");
+
+        // 分类候选来自账单里用过的分类：直接输入一个新分类并保存后它应当出现在候选里；
+        // 再用一次同一个分类（带首尾空格）不该造出第二条。
+        int todayBeforeCategory = CountDayEntries(DateTime.Today);
+
+        vm.AddCommand.Execute(null);
+        vm.Editor.DraftDescription = "分类样张一";
+        vm.Editor.DraftAmountText = "-5";
+        vm.Editor.DraftCategory = "餐饮";
+        vm.Editor.SaveCommand.Execute(null);
+
+        WaitUntil(() => vm.Editor.Categories.Contains("餐饮"), rounds: 100);
+
+        if (!vm.Editor.Categories.Contains("餐饮"))
+            throw new Exception($"新输入的分类没有进入候选: [{string.Join(", ", vm.Editor.Categories)}]");
+
+        int categoriesAfterFirst = vm.Editor.Categories.Count;
+
+        vm.AddCommand.Execute(null);
+        vm.Editor.DraftDescription = "分类样张二";
+        vm.Editor.DraftAmountText = "-6";
+        vm.Editor.DraftCategory = "  餐饮  ";
+        vm.Editor.SaveCommand.Execute(null);
+
+        WaitUntil(() => CountDayEntries(DateTime.Today) == todayBeforeCategory + 2, rounds: 100);
+        Pump();
+
+        Report($"分类候选 = [{string.Join(", ", vm.Editor.Categories)}]" +
+               $"（用过一个新分类后 {categoriesAfterFirst} 项）");
+
+        if (CountDayEntries(DateTime.Today) != todayBeforeCategory + 2)
+            throw new Exception("带分类的两笔没有都落到磁盘");
+
+        if (vm.Editor.Categories.Count != categoriesAfterFirst)
+            throw new Exception($"重复使用同一个分类造出了重复候选: [{string.Join(", ", vm.Editor.Categories)}]");
+
+        if (vm.Editor.Categories.Count(c => string.Equals(c, "餐饮", StringComparison.OrdinalIgnoreCase)) != 1)
+            throw new Exception("同一分类在候选里出现了多次");
 
         DrainSaves();
         DrainSaves();
@@ -761,7 +1021,46 @@ internal static class Program
 
     // ---- 7. 设置 ----
 
+    /// <summary>Run 键路径：与 SettingsViewModel 里自动启动写的是同一个位置。</summary>
+    private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+
+    /// <summary>
+    /// 自动启动开关会真实写 HKCU 的 Run 项，值是当前进程路径 —— 测试宿主自己。
+    /// 所以每次都要先存后还原，否则跑一次测试就会给系统留下一条开机启动
+    /// UiSmokeTest.exe 的垃圾项（中途抛异常时更会留下）。
+    /// </summary>
     private static void TestSettings()
+    {
+        var saved = ReadRunValue();
+        if (saved is not null)
+            Report($"Run 项 PaperCoin 原值 = {saved}");
+        try
+        {
+            TestSettingsCore();
+        }
+        finally
+        {
+            RestoreRunValue(saved);
+            Report($"Run 项 PaperCoin 已还原 = {ReadRunValue() ?? "(不存在)"}");
+        }
+    }
+
+    private static string? ReadRunValue()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath);
+        return key?.GetValue("PaperCoin") as string;
+    }
+
+    private static void RestoreRunValue(string? saved)
+    {
+        using var key = Registry.CurrentUser.CreateSubKey(RunKeyPath, writable: true);
+        if (key is null) throw new Exception($"打不开 Run 键: HKCU\\{RunKeyPath}");
+
+        if (saved is null) key.DeleteValue("PaperCoin", throwOnMissingValue: false);
+        else key.SetValue("PaperCoin", saved, RegistryValueKind.String);
+    }
+
+    private static void TestSettingsCore()
     {
         var config = new ConfigService();
         var theme = new ThemeManager(config);
@@ -1299,10 +1598,13 @@ internal static class Program
 
     private static BillRepository NewRepository() => new();
 
+    /// <summary>从测试程序集位置向上找仓库根：认解决方案文件，两种扩展名都接受。</summary>
     private static string? RepoRoot()
     {
         var dir = AppContext.BaseDirectory;
-        while (dir is not null && !File.Exists(Path.Combine(dir, "PaperCoin.slnx")))
+        while (dir is not null
+               && !File.Exists(Path.Combine(dir, "PaperCoin.sln"))
+               && !File.Exists(Path.Combine(dir, "PaperCoin.slnx")))
             dir = Path.GetDirectoryName(dir);
         return dir;
     }
@@ -2015,6 +2317,246 @@ internal static class Program
             throw new Exception(
                 $"日期框底色不是主题卡片底色: 实际 #{actual.R:X2}{actual.G:X2}{actual.B:X2}, " +
                 $"应为 #{expected.R:X2}{expected.G:X2}{expected.B:X2}（默认模板会写成白色）");
+    }
+
+    // ---- 15. 主题切换的颜色过渡 ----
+
+    /// <summary>
+    /// 主题切换要走颜色插值，而不是把字典条目直接换成现成的静态画刷。
+    /// 本环境渲染循环不推进，动画时钟不走，所以断言的是"过渡确实被建起来了"：
+    /// 画刷未被冻结、带活动动画、基准值等于目标色，且 DynamicResource 消费者拿到的就是同一个实例。
+    /// 这几条任何一条不成立，界面上的过渡都是假的。
+    /// </summary>
+    private static void TestThemeTransition()
+    {
+        var merged = Application.Current!.Resources.MergedDictionaries;
+        var index = PaperCoin.ThemeRenderer.IndexOfColorDictionary(merged);
+        if (index < 0) throw new Exception("找不到颜色字典");
+
+        var colors = merged[index];
+
+        // 先落到一个确定的静态状态
+        PaperCoin.ThemeRenderer.Apply("Dark");
+        ClearBrushAnimations(colors);
+
+        // 消费者必须挂进一个真正显示出来的窗口：资源失效通知只沿已加载的元素传播，
+        // 游离元素即使解析过也不会重解析，那样测出来的"没生效"是宿主问题而不是过渡问题。
+        var border = new Border();
+        border.SetResourceReference(Border.BackgroundProperty, "ColorMainContentArea");
+
+        var host = new Grid();
+        host.Children.Add(border);
+
+        var window = new Window
+        {
+            Width = 120,
+            Height = 80,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -10000,
+            Top = -10000,
+            Content = host
+        };
+
+        window.Show();
+        Pump();
+
+        var before = border.Background as SolidColorBrush;
+        Report($"  切换前消费者画刷 = {before?.Color.ToString() ?? "null"}");
+
+        if (before is null)
+            throw new Exception("消费者一开始就没有解析到画刷，测试宿主不成立");
+
+        try
+        {
+            PaperCoin.ThemeRenderer.Apply("Bright");
+            Pump();
+
+            var main = (SolidColorBrush)colors["ColorMainContentArea"];
+            var shadow = (SolidColorBrush)colors["ColorShadow"];
+
+            Report($"ColorMainContentArea: Color={main.Color} IsFrozen={main.IsFrozen} " +
+                   $"HasAnimatedProperties={main.HasAnimatedProperties}");
+            Report($"ColorShadow: Color={shadow.Color} Opacity={shadow.Opacity}");
+
+            if (main.IsFrozen)
+                throw new Exception("过渡画刷被冻结了，动画不可能生效");
+
+            if (!main.HasAnimatedProperties)
+                throw new Exception("主题切换没有建立颜色过渡（画刷上没有活动动画）");
+
+            // FillBehavior.Stop 会让动画结束时落回基准值，所以基准值必须等于目标色，否则会闪回旧颜色
+            var colorBase = main.GetAnimationBaseValue(SolidColorBrush.ColorProperty);
+            if (colorBase is not Color baseColor || baseColor != Color.FromRgb(0xFF, 0xFF, 0xFF))
+                throw new Exception($"颜色过渡的基准值不是目标色，动画结束会闪回旧值: {colorBase}");
+
+            // 两个主题的阴影透明度不同，只插值颜色会看到硬跳
+            var opacityBase = shadow.GetAnimationBaseValue(SolidColorBrush.OpacityProperty);
+            if (opacityBase is not double opacity || Math.Abs(opacity - 0.30) > 0.001)
+                throw new Exception($"阴影透明度没有参与过渡，基准值应为 0.30: {opacityBase}");
+
+            if (!ReferenceEquals(border.Background, main))
+                throw new Exception(
+                    $"消费者没有重新解析到过渡画刷，界面不会跟着动: " +
+                    $"{(border.Background as SolidColorBrush)?.Color.ToString() ?? "null"} vs {main.Color}");
+
+            Report($"  基准值 颜色={colorBase} 透明度={opacityBase}  消费者同实例=True");
+        }
+        finally
+        {
+            window.Close();
+            Pump();
+        }
+
+        // 摘掉动画应当落回基准值，也就是新主题的目标色
+        PaperCoin.ThemeRenderer.Apply("Dark");
+        ClearBrushAnimations(colors);
+
+        var restored = (SolidColorBrush)colors["ColorMainContentArea"];
+        Report($"  复位后 ColorMainContentArea = {restored.Color}（应为 Dark 的目标色）");
+
+        if (restored.Color != Color.FromRgb(0x1B, 0x25, 0x33))
+            throw new Exception($"摘除动画后颜色没有落回目标值: {restored.Color}");
+    }
+
+    // ---- 16. 自有程序集带产品版本 ----
+
+    /// <summary>
+    /// 自有程序集必须带上与产品一致的版本号。MSI 安装时按文件版本决定要不要覆盖：
+    /// 新版本不大于已安装版本就直接跳过，结果是安装目录里新旧 dll 混装 ——
+    /// 新的 PaperCoin.dll 调用旧 PaperCoin.Service.dll 里不存在的方法，运行时才炸 MissingMethodException。
+    /// 这条断言把"某个项目忘了设版本"挡在构建期，而不是等用户装上之后。
+    /// </summary>
+    private static void TestAssemblyVersions()
+    {
+        var expected = PaperCoin.Core.Constants.AppVersion;
+
+        var assemblies = new (string Name, System.Reflection.Assembly Assembly)[]
+        {
+            ("PaperCoin", typeof(TodayBill).Assembly),
+            ("PaperCoin.Core", typeof(PaperCoin.Core.Constants).Assembly),
+            ("PaperCoin.Service", typeof(PaperCoin.Service.BillRepository).Assembly)
+        };
+
+        foreach (var (name, assembly) in assemblies)
+        {
+            var fileVersion = System.Diagnostics.FileVersionInfo
+                .GetVersionInfo(assembly.Location).FileVersion;
+
+            Report($"{name}: 程序集版本={assembly.GetName().Version} 文件版本={fileVersion}");
+
+            if (fileVersion != expected + ".0")
+                throw new Exception(
+                    $"{name} 的文件版本是 {fileVersion}，应为 {expected}.0。" +
+                    "版本不递增时 MSI 不会覆盖已安装的旧文件，会造成新旧 dll 混装");
+        }
+
+        // 安装项目的 ProductVersion 是第三个版本载体：漏改它，MSI 会按错的版本号判断要不要覆盖文件
+        var root = RepoRoot();
+        var vdproj = root is null ? null : Path.Combine(root, "PaperCoin.Setup", "PaperCoin.Setup.vdproj");
+
+        if (vdproj is null || !File.Exists(vdproj))
+        {
+            Report("找不到 PaperCoin.Setup.vdproj，跳过安装项目版本比对");
+            return;
+        }
+
+        // VS 读不带 BOM 的 vdproj 时会退回按项目里声明的 CodePage（936）解释，
+        // 于是第一个中文字串就成乱码、项目直接打不开 —— 而 MSBuild 容忍这种情况，
+        // 所以只会在 IDE 里炸。用普通文本编辑器或脚本改写这个文件时很容易把 BOM 弄丢，这里挡住。
+        var header = new byte[3];
+        using (var stream = File.OpenRead(vdproj))
+        {
+            if (stream.Read(header, 0, 3) < 3
+                || header[0] != 0xEF || header[1] != 0xBB || header[2] != 0xBF)
+                throw new Exception(
+                    "PaperCoin.Setup.vdproj 缺少 UTF-8 BOM，Visual Studio 会打不开这个项目" +
+                    "（MSBuild 不报错，所以只有 IDE 会炸）");
+        }
+
+        Report("vdproj 带 UTF-8 BOM");
+
+        var match = System.Text.RegularExpressions.Regex.Match(
+            File.ReadAllText(vdproj), "\"ProductVersion\"\\s*=\\s*\"8:([0-9.]+)\"");
+
+        var installerVersion = match.Success ? match.Groups[1].Value : "(未找到)";
+        Report($"安装项目 ProductVersion = {installerVersion}");
+
+        if (installerVersion != expected)
+            throw new Exception(
+                $"安装项目的 ProductVersion 是 {installerVersion}，自有程序集是 {expected}。" +
+                "发布时要和 Directory.Build.props 的 <Version> 一起改");
+    }
+
+    // ---- 17. 安装位置记录 ----
+
+    /// <summary>
+    /// 程序必须把安装位置写进注册表。安装包的 "Locator" 节点搜的就是这个键，搜到才沿用旧路径；
+    /// 键名或值名对不上、或写不进去，升级就会装到第二个目录，而程序的数据目录就在程序目录下 ——
+    /// 用户会以为账单丢了。
+    /// 注意：测试进程的基目录是 bin 目录，所以这里写进去的是错的值，测完必须还原，
+    /// 否则留在注册表里会让下一次升级真的装错地方。
+    /// </summary>
+    private static void TestInstallLocation()
+    {
+        const string keyPath = PaperCoin.Service.InstallLocation.KeyPath;
+        const string valueName = PaperCoin.Service.InstallLocation.ValueName;
+
+        string? original = null;
+        bool keyExisted;
+
+        using (var probe = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(keyPath))
+        {
+            keyExisted = probe is not null;
+            original = probe?.GetValue(valueName) as string;
+        }
+
+        try
+        {
+            PaperCoin.Service.InstallLocation.Record();
+
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(keyPath)
+                ?? throw new Exception($"没有写入注册表键 HKCU\\{keyPath}");
+
+            var recorded = key.GetValue(valueName) as string;
+            Report($"HKCU\\{keyPath}\\{valueName} = {recorded ?? "(空)"}");
+
+            if (string.IsNullOrEmpty(recorded))
+                throw new Exception("安装位置没有写进注册表，升级时安装包搜不到旧路径");
+
+            var expected = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+
+            if (!string.Equals(recorded, expected, StringComparison.OrdinalIgnoreCase))
+                throw new Exception($"记录的位置与实际不符: {recorded} vs {expected}");
+        }
+        finally
+        {
+            if (keyExisted && original is not null)
+            {
+                using var restore = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(keyPath);
+                restore.SetValue(valueName, original);
+                Report($"已还原为 {original}");
+            }
+            else
+            {
+                Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(keyPath, throwOnMissingSubKey: false);
+                Report("测试前没有这个键，已清理");
+            }
+        }
+    }
+
+    /// <summary>摘掉字典里所有画刷的过渡动画，让资源回到静态值</summary>
+    private static void ClearBrushAnimations(ResourceDictionary colors)
+    {
+        foreach (var key in colors.Keys.Cast<object>().ToList())
+        {
+            if (colors[key] is not SolidColorBrush brush) continue;
+
+            // 静态画刷（字典装进去时被冻结）本来就没有动画，对它们 BeginAnimation 会抛异常
+            if (brush.IsFrozen) continue;
+
+            brush.BeginAnimation(SolidColorBrush.ColorProperty, null);
+            brush.BeginAnimation(SolidColorBrush.OpacityProperty, null);
+        }
     }
 
     /// <summary>渲染一个元素并取某个像素的颜色, 用于断言"底色对不对"这类事</summary>

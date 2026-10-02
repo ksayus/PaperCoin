@@ -67,6 +67,13 @@ public partial class App : Application
 
         Log.Information("PaperCoin 启动, 版本{Version}", Constants.AppVersion);
 
+        // 记下安装位置，安装程序升级时靠它认出旧路径
+        InstallLocation.Record();
+
+        // 安装包写进 MSI Icon 表的图标格式不对（见 ShortcutRepair 注释），
+        // 快捷方式的图标只能在这里补上。动作幂等，图标已经对了就不写盘。
+        ShortcutRepair.RepairDesktopShortcut();
+
         var configService = new ConfigService();
 
         // 主题须先于构建容器落地：MainWindow 由 StartupUri 创建，创建时 DynamicResource 即开始解析，晚了会先闪默认主题。
@@ -147,12 +154,7 @@ public partial class App : Application
         var index = ThemeRenderer.IndexOfColorDictionary(merged);
         if (index < 0) return;
 
-        merged[index] = new ResourceDictionary
-        {
-            Source = new Uri(
-                $"/{Constants.AppName};component/Themes/{theme}.xaml",
-                UriKind.Relative)
-        };
+        merged[index] = ThemeRenderer.LoadTheme(theme);
     }
 
     /// <summary>
