@@ -1,0 +1,309 @@
+using System.Text.Json;
+using PaperCoin.Core;
+using PaperCoin.Core.Models;
+using Serilog;
+
+namespace PaperCoin.Service;
+
+/// <summary>
+/// 账单持久化与查询。磁盘布局为 <c>Bills/yyyy/M/d/bills.json</c>，年月日已经是路径的一部分，
+/// 所以没有独立的索引文件，查询直接枚举目录，用户手工增删目录也能被正确识别。
+/// 首次访问时构建一次“日期 → 流水”的内存索引并常驻，避免翻月翻年时反复遍历目录。
+/// </summary>
+public class BillRepository
+{
+    private const string IndexFileName = "bills.json";
+
+    /// <summary>保护索引的构建与替换；磁盘遍历在锁外完成，不阻塞查询。</summary>
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
+    /// <summary>
+    /// 串行化写入与删除。保存是即发即忘的，两个写句柄落在同一个文件上会让后一个抛
+    /// <see cref="IOException"/>；删除与写入撞在一起时，写还可能把删掉的记录写回来。
+    /// </summary>
+    private readonly SemaphoreSlim _writeGate = new(1, 1);
+
+    private readonly Dictionary<DateOnly, List<BillEntry>> _index = [];
+
+    private bool _indexStale = true;
+
+    // ---- 查询 ----
+
+    /// <summary>读取某一天的流水，按录入顺序。没有记录时返回空集合。</summary>
+    public async Task<IReadOnlyList<BillEntry>> LoadDayAsync(DateOnly date, CancellationToken ct = default)
+    {
+        await EnsureIndexAsync(ct);
+
+        lock (_index)
+        {
+            return _index.TryGetValue(date, out var list)
+                ? list.ToList()          // 复制一份，不把内部集合暴露出去
+                : [];
+        }
+    }
+
+    /// <summary>读取整月流水</summary>
+    public async Task<IReadOnlyList<BillEntry>> LoadMonthAsync(int year, int month, CancellationToken ct = default)
+    {
+        await EnsureIndexAsync(ct);
+
+        lock (_index)
+        {
+            return _index
+                .Where(kv => kv.Key.Year == year && kv.Key.Month == month)
+                .OrderBy(kv => kv.Key)
+                .SelectMany(kv => kv.Value)
+                .ToList();
+        }
+    }
+
+    /// <summary>读取整年流水</summary>
+    public async Task<IReadOnlyList<BillEntry>> LoadYearAsync(int year, CancellationToken ct = default)
+    {
+        await EnsureIndexAsync(ct);
+
+        lock (_index)
+        {
+            return _index
+                .Where(kv => kv.Key.Year == year)
+                .OrderBy(kv => kv.Key)
+                .SelectMany(kv => kv.Value)
+                .ToList();
+        }
+    }
+
+    /// <summary>
+    /// 一次性取回全部流水，日期升序。规模不大（单机记账，一年通常几千条以内），
+    /// 用于“全部时间”视图或导出。
+    /// </summary>
+    public async Task<IReadOnlyList<BillEntry>> LoadAllAsync(CancellationToken ct = default)
+    {
+        await EnsureIndexAsync(ct);
+
+        lock (_index)
+        {
+            return _index
+                .OrderBy(kv => kv.Key)
+                .SelectMany(kv => kv.Value)
+                .ToList();
+        }
+    }
+
+    /// <summary>已落盘的日期集合，供日历判断某天是否有记录</summary>
+    public async Task<IReadOnlyCollection<DateOnly>> GetRecordedDatesAsync(CancellationToken ct = default)
+    {
+        await EnsureIndexAsync(ct);
+
+        lock (_index)
+        {
+            return _index.Keys.ToList();
+        }
+    }
+
+    // ---- 写入 ----
+
+    /// <summary>
+    /// 保存流水，按每条记录自身的 <see cref="BillEntry.Date"/> 分组写入对应日期的文件。
+    /// 单日文件是该日期的全部内容，所以逐日覆盖写是安全且幂等的。
+    /// </summary>
+    public async Task SaveAsync(IEnumerable<BillEntry> entries, CancellationToken ct = default)
+    {
+        // 分组是纯内存操作，放在锁外
+        var byDate = entries
+            .GroupBy(e => e.Date)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        await _writeGate.WaitAsync(ct);
+        try
+        {
+            foreach (var (date, list) in byDate)
+                await WriteDayAsync(date, list, ct);
+
+            // 只影响已存在的日期分组，索引结构不用重建，直接同步内容
+            lock (_index)
+            {
+                foreach (var (date, list) in byDate)
+                    _index[date] = list;
+            }
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 删除某一天的全部流水：删掉那一天的 bills.json，并收掉因此变空的目录。
+    /// 空集合表达不了“这一天应该是空的”，所以这个语义只能由调用方显式调用本方法；
+    /// 调用方必须 await，因为下次启动读到的是磁盘。
+    /// </summary>
+    /// <returns>磁盘是否真的清干净了。失败时调用方应当告知用户。</returns>
+    public async Task<bool> DeleteDayAsync(DateOnly date, CancellationToken ct = default)
+    {
+        await _writeGate.WaitAsync(ct);
+        try
+        {
+            var dir = DayDirectory(date);
+            var file = Path.Combine(dir, IndexFileName);
+
+            if (File.Exists(file)) File.Delete(file);
+
+            PruneEmptyFolders(dir);
+
+            // 磁盘已经是空的，索引跟着改掉即可
+            lock (_index) _index.Remove(date);
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 索引不动：磁盘上还有数据，内存与磁盘保持一致
+            Log.Warning(ex, "删除账单文件失败: {Date}", date);
+            return false;
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 自下而上收掉因此变空的日 / 月 / 年目录。非空或被占用时停止，所以不能传
+    /// <c>recursive: true</c>；循环上限 3 层，保证不会动到 <see cref="Constants.BillFolder"/> 本身。
+    /// </summary>
+    private static void PruneEmptyFolders(string dayDir)
+    {
+        var current = dayDir;
+
+        for (int depth = 0; depth < 3 && !string.IsNullOrEmpty(current); depth++)
+        {
+            if (!Directory.Exists(current)) return;
+
+            try
+            {
+                Directory.Delete(current, recursive: false);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // 非空或被占用：到此为止，更上层肯定也非空
+                return;
+            }
+
+            current = Path.GetDirectoryName(current);
+        }
+    }
+
+    /// <summary>某一天的目录 <c>Bills/yyyy/M/d</c>。读、写、删三条路径共用这一处实现。</summary>
+    private static string DayDirectory(DateOnly date)
+        => Path.Combine(
+            Constants.BillFolder,
+            date.Year.ToString(),
+            date.Month.ToString(),
+            date.Day.ToString());
+
+    private static Task WriteDayAsync(DateOnly date, IReadOnlyList<BillEntry> entries, CancellationToken ct)
+    {
+        var dir = DayDirectory(date);
+
+        Directory.CreateDirectory(dir);
+
+        return BillJsonManager.SaveToFileAsync(Path.Combine(dir, IndexFileName), entries, ct);
+    }
+
+    // ---- 索引 ----
+
+    private async Task EnsureIndexAsync(CancellationToken ct)
+    {
+        if (!_indexStale) return;
+
+        await _gate.WaitAsync(ct);
+        try
+        {
+            // 等锁期间可能已有其它调用把索引建好了
+            if (!_indexStale) return;
+
+            var built = await BuildIndexAsync(ct);
+
+            lock (_index)
+            {
+                _index.Clear();
+                foreach (var (date, list) in built)
+                    _index[date] = list;
+            }
+
+            _indexStale = false;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 遍历 Bills 目录构建 <c>日期 → 流水</c> 映射。目录名解析不出合法日期的直接跳过，
+    /// 用户放在这里的备份文件夹或空目录不该让日历打不开。
+    /// </summary>
+    private static async Task<Dictionary<DateOnly, List<BillEntry>>> BuildIndexAsync(CancellationToken ct)
+    {
+        var index = new Dictionary<DateOnly, List<BillEntry>>();
+
+        if (!Directory.Exists(Constants.BillFolder))
+            return index;
+
+        foreach (var yearDir in Directory.EnumerateDirectories(Constants.BillFolder))
+        {
+            if (!int.TryParse(Path.GetFileName(yearDir), out var year)) continue;
+
+            foreach (var monthDir in Directory.EnumerateDirectories(yearDir))
+            {
+                if (!int.TryParse(Path.GetFileName(monthDir), out var month)) continue;
+
+                foreach (var dayDir in Directory.EnumerateDirectories(monthDir))
+                {
+                    if (!int.TryParse(Path.GetFileName(dayDir), out var day)) continue;
+                    if (!DateOnly.TryParse($"{year}/{month}/{day}", out var date)) continue;
+
+                    var file = Path.Combine(dayDir, IndexFileName);
+                    if (!File.Exists(file)) continue;
+
+                    var list = await ReadDayFileAsync(file, ct);
+                    if (list.Count > 0)
+                        index[date] = list;
+                }
+            }
+        }
+
+        return index;
+    }
+
+    /// <summary>
+    /// 读取单个日文件。文件损坏（手工编辑出错、写入被中断）时记日志并跳过，而不是抛出，
+    /// 避免一个坏文件让整个月的账都看不见。
+    /// </summary>
+    private static async Task<List<BillEntry>> ReadDayFileAsync(string path, CancellationToken ct)
+    {
+        try
+        {
+            var json = await File.ReadAllTextAsync(path, ct);
+            if (string.IsNullOrWhiteSpace(json)) return [];
+
+            return JsonSerializer.Deserialize<List<BillEntry>>(json, JsonOptions) ?? [];
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            Log.Warning(ex, "账单文件读取失败, 已跳过: {Path}", path);
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// 与 <see cref="BillJsonManager"/> 保持一致的序列化配置，两处必须同步，
+    /// 否则会出现写得进去却读不出来。这里不复用它的 <c>FromJSON</c>，因为本类要跳过坏文件。
+    /// </summary>
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+}

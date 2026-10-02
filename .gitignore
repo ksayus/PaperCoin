@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------------------
+# 构建产物
+# ---------------------------------------------------------------------------
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+artifacts/
+publish/
+*.binlog
+*.tlog
+project.lock.json
+project.fragment.lock.json
+
+# ---------------------------------------------------------------------------
+# Visual Studio / Rider / VS Code
+# ---------------------------------------------------------------------------
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.userprefs
+*.sln.docstates
+*.csproj.user
+*.vcxproj.user
+*.DotSettings.user
+*.swp
+*~
+
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# ---------------------------------------------------------------------------
+# 测试与覆盖率
+# ---------------------------------------------------------------------------
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+coverage*.json
+coverage*.xml
+lcov.info
+
+# ---------------------------------------------------------------------------
+# 运行时数据
+# 位置取决于进程的当前工作目录，从仓库根目录启动时会落在 PaperCoin/ 下。
+# ---------------------------------------------------------------------------
+PaperCoin/Config/
+PaperCoin/Logs/
+PaperCoin/Bills/
+papercoin-settings.json
+papercoin-*.log
+
+# ---------------------------------------------------------------------------
+# LAE 动画引擎
+# 本地放置的独立项目（含自己的 .slnx / README / LICENSE），不入库。
+# PaperCoin.csproj 与 PaperCoin.slnx 都按 LivelyAnimationEngine/LAE/
+# LivelyAnimationEngine.csproj 这个相对路径引用它，克隆后需自行补齐。
+# ---------------------------------------------------------------------------
+/LivelyAnimationEngine/

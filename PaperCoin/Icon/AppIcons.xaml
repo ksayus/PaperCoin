@@ -1,0 +1,68 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=System.Runtime">
+
+    <!-- 应用图标码位表：所有图标字形的唯一来源。
+
+         iconfont 的码位是按项目分配的，同一个图标在不同项目里拿到的码位不同，
+         光看 U+E649 这种编号无法反查它长什么样，所以码位与语义的对应关系集中写在这里。
+         换图标时只改这个文件，各 View 都通过 DynamicResource 引用。 -->
+
+    <!-- 已核对的字形清单，Iconfont.ttf 里全部 18 个码位。
+
+         核对方式：用 GDI+ 的 PrivateFontCollection 按文件路径加载这个 TTF，逐个码位画出来看。
+         不要用 WPF 的 pack 资源字体去画，无窗口的测试宿主里解析不出来，所有图标会画成缺字方框。
+
+           U+E600 文件夹(实心)     U+E682 列表/账单(圆角框+两横)
+           U+E60C 电源             U+E71E 日历
+           U+E60E ›(右尖括号)      U+E7EB 齿轮(六边形底)
+           U+E62A ✕(叉)            U+EAEC 调色盘
+           U+E645 方框+铅笔        U+EAF3 ＋(加号)
+           U+E649 圆圈 i           U+EB2F 时钟
+           U+E64E ‹(左尖括号)      U+ED1B ▮▮(暂停)
+           U+E650 ─(最小化)        U+E651 □(最大化)
+           U+E653 叠框(还原)       U+E678 云
+
+         两个结论：U+ED1B 是“暂停”而不是垃圾桶；这套字体里没有垃圾桶，也没有刷新箭头和下载箭头，
+         垃圾桶改用下面的 IconDeleteGeometry 矢量几何。 -->
+
+    <!-- 侧边栏 / 标题栏 -->
+    <sys:String x:Key="IconTodayBill">&#xe682;</sys:String>
+    <sys:String x:Key="IconCalendar">&#xe71e;</sys:String>
+    <sys:String x:Key="IconSettings">&#xe7eb;</sys:String>
+    <sys:String x:Key="IconAdd">&#xeaf3;</sys:String>
+    <sys:String x:Key="IconClose">&#xe62a;</sys:String>
+    <sys:String x:Key="IconMinimize">&#xe650;</sys:String>
+    <sys:String x:Key="IconMaximize">&#xe651;</sys:String>
+    <sys:String x:Key="IconRestore">&#xe653;</sys:String>
+
+    <!-- 删除：本表里唯一不走字体的图标。
+
+         字体没有垃圾桶字形，所以这里给的是矢量几何。三段矩形分别是提手、盖子、桶身。
+         坐标写在 12×12 的框里，引用方按原尺寸画即可，不要设 Stretch，拉伸会把 1.1px 的线宽一起缩放。
+         将来字体补了垃圾桶，把这一项换回 sys:String 并把引用处的 Path 改回内容文本即可。 -->
+    <GeometryGroup x:Key="IconDeleteGeometry">
+        <RectangleGeometry Rect="4.3,0.4,3.4,1.5" RadiusX="0.5" RadiusY="0.5"/>
+        <RectangleGeometry Rect="0.5,2.4,11,1.4" RadiusX="0.7" RadiusY="0.7"/>
+        <RectangleGeometry Rect="2.1,5,7.8,6.2" RadiusX="1.2" RadiusY="1.2"/>
+    </GeometryGroup>
+
+    <!-- 编辑 / 铅笔 -->
+    <sys:String x:Key="IconEdit">&#xe645;</sys:String>
+
+    <!-- 信息 / 关于 -->
+    <sys:String x:Key="IconInfo">&#xe649;</sys:String>
+
+    <!-- 文件夹 / 数据目录 -->
+    <sys:String x:Key="IconFolder">&#xe600;</sys:String>
+
+    <!-- 主题 / 调色盘 -->
+    <sys:String x:Key="IconTheme">&#xeaec;</sys:String>
+
+    <!-- 自动更新。字体里只有一朵云，没有刷新箭头，现有字形里没有更合适的，保留待补字形。 -->
+    <sys:String x:Key="IconUpdate">&#xe678;</sys:String>
+
+    <!-- 更新源。同上：这个码位实际是“‹”左尖括号，不是下载箭头。 -->
+    <sys:String x:Key="IconDownload">&#xe64e;</sys:String>
+
+</ResourceDictionary>

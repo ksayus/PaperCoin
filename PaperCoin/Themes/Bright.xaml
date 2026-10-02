@@ -1,0 +1,38 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- 本字典的 x:Key 集合必须与 Dark.xaml 完全一致。主题切换按 key 就地替换条目（见 ThemeRenderer），
+         DynamicResource 找不到 key 不会抛异常，只会静默回退，表现是某个控件颜色不对且没有任何报错。 -->
+
+    <!-- Title -->
+    <SolidColorBrush x:Key="ColorTitleTop" Color="#E9EDF4"/>
+
+    <!-- Card -->
+    <SolidColorBrush x:Key="ColorSideBar" Color="#F2F5FA"/>
+    <SolidColorBrush x:Key="ColorMainContentArea" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="ColorCardBackground" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="ColorCardBorder" Color="#DDE3ED"/>
+    <SolidColorBrush x:Key="ColorCardActionBackground" Color="#EDF1F7"/>
+
+    <!-- Button -->
+    <SolidColorBrush x:Key="ColorSideBarBtn" Color="Transparent"/>
+    <SolidColorBrush x:Key="ColorSideBarBtnOver" Color="#E4EAF3"/>
+    <SolidColorBrush x:Key="ColorSideBarBtnActive" Color="#D3DDEB"/>
+    <SolidColorBrush x:Key="ColorSideBarBtnPressed" Color="#C6D2E3"/>
+
+    <SolidColorBrush x:Key="ColorAddNewBillBtn" Color="#4C6FA5"/>
+    <SolidColorBrush x:Key="ColorAddNewBillBtnOver" Color="#5C82BC"/>
+    <SolidColorBrush x:Key="ColorAddNewBillBtnPressed" Color="#3F5D8C"/>
+
+    <!-- Text -->
+    <SolidColorBrush x:Key="ColorTextTitle" Color="#1B2533"/>
+    <SolidColorBrush x:Key="ColorTextSecondary" Color="#6B7A90"/>
+
+    <!-- Amount -->
+    <SolidColorBrush x:Key="ColorPositive" Color="#1F9D5B"/>
+    <SolidColorBrush x:Key="ColorNegative" Color="#D0453C"/>
+
+    <!-- Shadow：亮色主题用低透明度冷灰，纯黑在浅底上偏脏且边缘发硬。 -->
+    <SolidColorBrush x:Key="ColorShadow" Color="#7A8CA6" Opacity="0.30"/>
+    <SolidColorBrush x:Key="ColorWindowShadow" Color="#7A8CA6" Opacity="0.35"/>
+</ResourceDictionary>

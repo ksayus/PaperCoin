@@ -1,0 +1,31 @@
+﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ControlTemplate x:Key="ButtonTemplate" TargetType="{x:Type Button}">
+        <Border Background="{TemplateBinding Background}"
+                BorderBrush="{TemplateBinding Background}"
+                SnapsToDevicePixels="True"
+                CornerRadius="7">
+            <ContentPresenter
+                HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                Margin="{TemplateBinding Margin}"
+                RecognizesAccessKey="True"/>
+        </Border>
+    </ControlTemplate>
+
+    <Style x:Key="SideBarbtn" TargetType="{x:Type Button}">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="Height" Value="50"/>
+        <Setter Property="Width" Value="40"/>
+        <Setter Property="Margin" Value="4"/>
+        <Setter Property="FontSize" Value="26"/>
+        <Setter Property="FontFamily" Value="{DynamicResource Iconfont}"/>
+        <Setter Property="Template" Value="{DynamicResource ButtonTemplate}"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Style.Triggers>
+        </Style.Triggers>
+    </Style>
+</ResourceDictionary>

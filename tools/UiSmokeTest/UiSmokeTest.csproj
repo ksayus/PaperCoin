@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 手工驱动的 UI 冒烟测试，不加入 PaperCoin.slnx，避免污染正式构建产物。
+       用法: dotnet run（在 tools/UiSmokeTest 目录下执行） -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>UiSmokeTest</AssemblyName>
+    <RootNamespace>PaperCoin.UiSmokeTest</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\PaperCoin\PaperCoin.csproj" />
+  </ItemGroup>
+</Project>

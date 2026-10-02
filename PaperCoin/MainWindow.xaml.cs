@@ -1,0 +1,251 @@
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Threading;
+using LAE;
+using Microsoft.Extensions.DependencyInjection;
+using PaperCoin.ViewModels;
+using PaperCoin.Views;
+
+namespace PaperCoin;
+
+/// <summary>
+/// Interaction logic for MainWindow.xaml
+/// </summary>
+public partial class MainWindow : Window
+{
+    /// <summary>侧边栏的导航项</summary>
+    private enum NavItem
+    {
+        TodayBill,
+        CalenderBill,
+        Settings
+    }
+
+    /// <summary>
+    /// 指示器过渡动画的注册名。目标改变时须先停掉在跑的动画，
+    /// 否则两条动画会同时往同一个 Y 上写值。
+    /// </summary>
+    internal const string IndicatorAnimationName = "SideBarIndicator";
+
+    /// <summary>
+    /// 指示器当前应停在的位置，即过渡动画的终点。LayoutUpdated 会频繁带着同一目标触发，
+    /// 用该值区分布局复算与真正换了导航项，避免打断正在播放的过渡。初值 NaN，首帧必定走播放分支。
+    /// </summary>
+    private double _indicatorTarget = double.NaN;
+
+    /// <summary>当前高亮的导航项，窗口尺寸变化时用它把指示器重新对准。</summary>
+    private NavItem _activeNav = NavItem.TodayBill;
+
+    private readonly Dictionary<string, UserControl> _pageCache = new();
+
+    public MainWindow()
+    {
+        InitializeComponent();
+        this.MaxHeight = SystemParameters.PrimaryScreenHeight;
+
+        NavigateTo("TodayBill");
+        Loaded += MainWindow_Loaded;
+
+        // SizeChanged 在拖拽时会被节流，用 LayoutUpdated 保证布局变化后校正一次。
+        SizeChanged += (_, _) => RepositionIndicator(animate: false);
+        LayoutUpdated += (_, _) =>
+        {
+            if (IsLoaded) RepositionIndicator(animate: false);
+        };
+    }
+
+    private void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    {
+        // 推迟到 Render 优先级：此时布局未完成，NavPanel.ActualHeight 仍为 0，算出的位置不正确。
+        Dispatcher.BeginInvoke(new Action(() => RepositionIndicator(animate: true)),
+            DispatcherPriority.Render);
+    }
+
+    // ---- 窗口控制 ----
+
+    private void TitleBorder_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 1)
+            this.DragMove();
+    }
+
+    private void Min_btn_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+
+    private void Max_btn_Click(object sender, RoutedEventArgs e)
+    {
+        WindowState = WindowState == WindowState.Maximized
+            ? WindowState.Normal : WindowState.Maximized;
+    }
+
+    private void Close_btn_Click(object sender, RoutedEventArgs e) => Close();
+
+    // ---- 导航 ----
+
+    private void TodayBill_Nav_Click(object sender, RoutedEventArgs e)
+        => GoTo(NavItem.TodayBill, TodayBillBtn);
+
+    private void CalenderBtn_Click(object sender, RoutedEventArgs e)
+        => GoTo(NavItem.CalenderBill, CalenderBtn);
+
+    private void SettingsBtn_Click(object sender, RoutedEventArgs e)
+        => GoTo(NavItem.Settings, SettingsBtn);
+
+    /// <summary>切换到指定导航项。指示器位置由按钮自身的布局算出，不使用硬编码像素。</summary>
+    private void GoTo(NavItem item, Button button)
+    {
+        _activeNav = item;
+        NavigateTo(item.ToString());
+        MoveIndicatorTo(button, animate: true);
+    }
+
+    private void NavigateTo(string pageName)
+    {
+        UserControl? page = pageName switch
+        {
+            "TodayBill" => GetOrCreatePage("TodayBill", () => new TodayBill()),
+            "CalenderBill" => GetOrCreatePage("CalenderBill", () => new CalenderBill()),
+            "Settings" => GetOrCreatePage("Settings", () => new Settings()),
+            _ => null
+        };
+
+        if (page is null) return;
+
+        UpdatePageDataContext(page, pageName);
+        MainContentArea.Child = page;
+    }
+
+    private UserControl GetOrCreatePage(string key, Func<UserControl> factory)
+    {
+        if (!_pageCache.TryGetValue(key, out var page))
+        {
+            page = factory();
+            _pageCache[key] = page;
+        }
+        return page;
+    }
+
+    private void UpdatePageDataContext(UserControl page, string pageName)
+    {
+        switch (pageName)
+        {
+            case "TodayBill":
+                page.DataContext = App.Services.GetRequiredService<TodayBillViewModel>();
+                break;
+            case "CalenderBill":
+                page.DataContext = App.Services.GetRequiredService<CalenderBillViewModel>();
+                break;
+            case "Settings":
+                page.DataContext = App.Services.GetRequiredService<SettingsViewModel>();
+                break;
+        }
+    }
+
+    // ---- 指示器定位 ----
+
+    private void RepositionIndicator(bool animate)
+    {
+        var button = _activeNav switch
+        {
+            NavItem.TodayBill => TodayBillBtn,
+            NavItem.CalenderBill => CalenderBtn,
+            _ => SettingsBtn
+        };
+
+        MoveIndicatorTo(button, animate);
+    }
+
+    // ---- 自动化验证入口（仅供 tools/UiSmokeTest 使用，internal + InternalsVisibleTo）----
+
+    /// <summary>指示器当前的纵向偏移，供测试断言它随布局重算。</summary>
+    internal double IndicatorY => SideBarActiveShapeTranslateTransform.Y;
+
+    /// <summary>侧边栏按钮容器的高度，供测试确认缩放改变了布局。</summary>
+    internal double NavPanelHeight => NavPanel.ActualHeight;
+
+    /// <summary>按名导航，供测试驱动侧边栏切换。</summary>
+    internal void NavigateForTest(string pageName)
+    {
+        _activeNav = pageName switch
+        {
+            "CalenderBill" => NavItem.CalenderBill,
+            "Settings" => NavItem.Settings,
+            _ => NavItem.TodayBill
+        };
+
+        NavigateTo(pageName);
+        RepositionIndicator(animate: false);
+    }
+
+    /// <summary>取侧边栏按钮，供测试以真实点击驱动导航（NavigateForTest 走 animate: false，覆盖不到过渡动画）。</summary>
+    internal Button NavButtonForTest(string pageName) => pageName switch
+    {
+        "CalenderBill" => CalenderBtn,
+        "Settings" => SettingsBtn,
+        _ => TodayBillBtn
+    };
+
+    /// <summary>
+    /// 把指示器对准指定按钮。指示器的 VerticalAlignment 为 Bottom，Y 表示相对底端的负向偏移，
+    /// 偏移量 = 按钮中心（相对 NavPanel）− 侧边栏高度 + 指示器半高。
+    /// </summary>
+    private void MoveIndicatorTo(Button? button, bool animate)
+    {
+        if (button is null || NavPanel is null || SideBarActiveShape is null) return;
+
+        double navHeight = NavPanel.ActualHeight;
+        double buttonHeight = button.ActualHeight;
+
+        // 布局未完成时两个高度均为 0，跳过，等 LayoutUpdated 再算。
+        if (navHeight <= 0 || buttonHeight <= 0) return;
+
+        double buttonCenter = button.TranslatePoint(
+            new Point(0, buttonHeight / 2), NavPanel).Y;
+
+        double indicatorHeight = SideBarActiveShape.ActualHeight > 0
+            ? SideBarActiveShape.ActualHeight
+            : SideBarActiveShape.Height;
+
+        double target = buttonCenter - navHeight + indicatorHeight / 2 + 4;
+        
+        ApplyIndicatorOffset(target, animate);
+    }
+
+    /// <summary>
+    /// 施加偏移。用绝对目标而非相对位移，重复调用不累积误差；
+    /// 目标未变化时直接返回，让正在播放的过渡跑完。
+    /// </summary>
+    private void ApplyIndicatorOffset(double target, bool animate)
+    {
+        if (SideBarActiveShapeTranslateTransform is null
+            || SideBarActiveShapeScaleTransform is null) return;
+
+        if (Math.Abs(_indicatorTarget - target) < 0.5) return;
+
+        _indicatorTarget = target;
+
+        // 先停掉在跑的旧过渡，避免两条动画同时写同一个 Y
+        LAEngine.Stop(IndicatorAnimationName);
+
+        if (!animate)
+        {
+            // 拖拽缩放时直接落位，插值会让指示器追着鼠标跑
+            SideBarActiveShapeTranslateTransform.Y = target;
+
+            // 缩放也要归位，只落位 Y 会让指示器停在 0.96 或 1.05 这类非静止尺寸上。
+            SideBarActiveShapeScaleTransform.ScaleX = 1;
+            SideBarActiveShapeScaleTransform.ScaleY = 1;
+            return;
+        }
+
+        LA.Builder(IndicatorAnimationName)
+            .Ease(Easing.InOutCubic)
+            .Move(SideBarActiveShapeTranslateTransform, 0, target, 240)
+            .Scale(SideBarActiveShapeScaleTransform, 0.92, 80)
+            .Then()
+            .Scale(SideBarActiveShapeScaleTransform, 1.05, 80)
+            .Then()
+            .Scale(SideBarActiveShapeScaleTransform, 1.0, 40)
+            .Play();
+    }
+}

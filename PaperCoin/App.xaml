@@ -1,0 +1,24 @@
+<Application x:Class="PaperCoin.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:PaperCoin"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!-- 主题切换按 key 定位这本字典（见 ThemeRenderer）；MergedDictionaries 的成员不生成字段，用不了 x:Name。
+                     这里挂 Dark.xaml 只是编译期默认值，运行时会按配置里保存的主题替换（见 App.OnStartup）。 -->
+                <ResourceDictionary Source="/Themes/Dark.xaml"/>
+
+                <ResourceDictionary Source="/Themes/Controls.xaml"/>
+
+                <ResourceDictionary Source="/icon/TitleIcon.xaml"/>
+                <ResourceDictionary Source="/Icon/SiderBarIcon.xaml"/>
+                <ResourceDictionary Source="/Icon/ButtonIcon.xaml"/>
+                <ResourceDictionary Source="/Icon/AppIcons.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
+            <FontFamily x:Key="Iconfont">/PaperCoin;component/Icon/iconfont.ttf#iconfont</FontFamily>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>
