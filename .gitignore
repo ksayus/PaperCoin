@@ -53,9 +53,13 @@ lcov.info
 # 运行时数据
 # 位置取决于进程的当前工作目录，从仓库根目录启动时会落在 PaperCoin/ 下。
 # ---------------------------------------------------------------------------
+# 运行时数据（开发时在输出目录下产生，1.3.0 起正式位置是 %APPDATA%\PaperCoin）
+# Export 是统计页导出的 CSV。
+# ---------------------------------------------------------------------------
 PaperCoin/Config/
 PaperCoin/Logs/
 PaperCoin/Bills/
+PaperCoin/Export/
 papercoin-settings.json
 papercoin-*.log
 

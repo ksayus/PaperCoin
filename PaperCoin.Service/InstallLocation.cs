@@ -7,7 +7,7 @@ namespace PaperCoin.Service;
 /// 记录本机的应用安装位置。
 /// <para>
 /// 安装程序升级时会搜这个键来决定装到哪里：搜到就沿用旧路径，搜不到才用默认值。
-/// 这样升级不会把文件装到第二个目录，程序的数据目录（就在程序目录下）也不会跟着搬家。
+/// 这样升级不会把文件装到第二个目录。
 /// </para>
 /// <para>
 /// <see cref="KeyPath"/> 与 <see cref="ValueName"/> 是和安装包约定好的：
@@ -24,26 +24,39 @@ public static class InstallLocation
 
     /// <summary>
     /// 把当前安装位置写进注册表，供下一次升级识别。
-    /// 用 HKCU 而不是 HKLM：本程序是每用户安装，写 HKLM 需要提权。
+    /// <para>
+    /// 写 HKLM：1.3.0 起是每机器安装（装到 <c>Program Files</c>，安装时提权），
+    /// 安装包的 RegLocator 也改成搜 HKLM。1.2.x 写的是 HKCU，安装包里同时保留了一个
+    /// HKCU 定位器，好在从旧版升级上来时还能认出旧路径。
+    /// </para>
     /// </summary>
     public static void Record()
     {
         try
         {
-            using var key = Registry.CurrentUser.CreateSubKey(KeyPath);
+            using var key = Registry.LocalMachine.CreateSubKey(KeyPath);
             key?.SetValue(ValueName, AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar));
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException)
         {
-            // 组策略可能封锁这个位置。记不上只是下次升级找不到旧路径，不该影响程序启动。
-            Log.Warning(ex, "记录安装位置失败");
+            // 程序不以管理员身份运行时写不进 HKLM。记不上只是下次升级找不到旧路径，
+            // 不该影响程序启动 —— 安装包那边的 HKCU 定位器还能兜住旧版本。
+            Log.Warning(ex, "记录安装位置失败（需要管理员权限写 HKLM）");
         }
     }
 
-    /// <summary>读回记录的位置，没有记录时返回 <c>null</c></summary>
+    /// <summary>
+    /// 读回记录的位置，没有记录时返回 <c>null</c>。
+    /// HKLM 优先，找不到再看 HKCU —— 后者是 1.2.x 留下的。
+    /// </summary>
     public static string? Read()
     {
-        using var key = Registry.CurrentUser.OpenSubKey(KeyPath);
-        return key?.GetValue(ValueName) as string;
+        using (var machine = Registry.LocalMachine.OpenSubKey(KeyPath))
+        {
+            if (machine?.GetValue(ValueName) is string fromMachine) return fromMachine;
+        }
+
+        using var user = Registry.CurrentUser.OpenSubKey(KeyPath);
+        return user?.GetValue(ValueName) as string;
     }
 }
