@@ -1,0 +1,121 @@
+﻿# 反证脚本：逐个把实现改回错的，确认对应断言真的会失败。
+# 每条都自动还原；任何一步没能还原成功就直接抛。
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+Set-Location $root
+
+$smokeLog = Join-Path $env:TEMP 'refute.log'
+
+# 每项: 名称 / 文件 / 原串 / 替换串 / 期望失败的测试项号
+$cases = @(
+    @{
+        Name = '分类汇总不排除收入'
+        File = 'PaperCoin.Service\BillRepository.cs'
+        From = '.Where(e => e.Amount < 0)
+                .GroupBy(e => Core.CategoryPalette.Normalize(e.Category)'
+        To   = '.Where(e => true)
+                .GroupBy(e => Core.CategoryPalette.Normalize(e.Category)'
+        Test = '21.'
+    },
+    @{
+        Name = 'CSV 不带 UTF-8 BOM'
+        File = 'PaperCoin\ViewModels\StatisticsViewModel.cs'
+        From = 'new UTF8Encoding(encoderShouldEmitUTF8Identifier: true)'
+        To   = 'new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)'
+        Test = '25.'
+    },
+    @{
+        Name = '圆环按平均角度分'
+        File = 'PaperCoin\Controls\DonutChart.cs'
+        From = 'double sweep = Math.Max(MinSweep, segment.Fraction / totalFraction * (Math.PI * 2));'
+        To   = 'double sweep = totalFraction == 0 ? 0 : totalFraction / totalFraction * (Math.PI * 2) / segments.Count;'
+        Test = '23.'
+    },
+    @{
+        Name = '分类颜色用 GetHashCode'
+        File = 'PaperCoin.Core\CategoryPalette.cs'
+        From = '        return (int)(hash % SlotCount);'
+        To   = '        return Math.Abs(category.Trim().ToLowerInvariant().GetHashCode()) % SlotCount;'
+        Test = '20.'
+    }
+)
+
+function Invoke-Smoke([string]$label) {
+    if (Test-Path $smokeLog) { Remove-Item $smokeLog -Force }
+
+    $proc = Start-Process -FilePath 'dotnet' `
+        -ArgumentList 'run', '--no-build', '--project', 'tools\UiSmokeTest\UiSmokeTest.csproj' `
+        -RedirectStandardOutput $smokeLog -PassThru -NoNewWindow
+
+    if (-not $proc.WaitForExit(240000)) { $proc.Kill(); throw "$label 超时" }
+
+    return Get-Content $smokeLog -Encoding UTF8
+}
+
+Write-Host '=== 基线：当前实现必须全部通过 ==='
+$baseline = Invoke-Smoke 'baseline'
+if (-not ($baseline | Select-String '== 全部通过 ==')) {
+    $baseline | Select-String '结果: 失败' -Context 0, 2 | ForEach-Object { $_.Line + ' ' + $_.Context.PostContext }
+    throw '基线没有全绿，反证无从谈起'
+}
+Write-Host '  基线全绿。'
+
+$failed = @()
+
+foreach ($case in $cases) {
+    $path = $case.File
+    $original = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
+
+    if (-not $original.Contains($case.From)) {
+        Write-Host "[$($case.Name)] 找不到要替换的代码，跳过（锚点已过时）"
+        $failed += $case.Name
+        continue
+    }
+
+    [System.IO.File]::WriteAllText($path, $original.Replace($case.From, $case.To),
+        (New-Object System.Text.UTF8Encoding($false)))
+
+    try {
+        Write-Host "[$($case.Name)] 已注入错误，重建并跑测试…"
+        dotnet build tools\UiSmokeTest\UiSmokeTest.csproj -m:1 -v:q --nologo 2>&1 |
+            Select-String 'error' | Select-Object -First 5 | ForEach-Object { '    ' + $_.Line }
+
+        $output = Invoke-Smoke $case.Name
+
+        $hit = $output | Select-String -Pattern "^\[测试\] $([regex]::Escape($case.Test))" -Context 0, 12
+        $line = ($hit | Select-Object -First 1)
+        $block = if ($line) { ($line.Line + "`n" + ($line.Context.PostContext -join "`n")) } else { '' }
+        $isFail = $block -match '结果: 失败'
+
+        if ($isFail) {
+            $reason = ($block -split "`n" | Select-String '结果: 失败' | Select-Object -First 1).Line.Trim()
+            Write-Host "  ✔ 第 $($case.Test) 项如实失败：$reason"
+        } else {
+            Write-Host "  ✘ 第 $($case.Test) 项没有失败 —— 这条断言是摆设"
+            $failed += $case.Name
+        }
+    }
+    finally {
+        [System.IO.File]::WriteAllText($path, $original, [System.Text.Encoding]::UTF8)
+        Write-Host "  已还原 $path"
+    }
+}
+
+Write-Host ''
+Write-Host '=== 还原后复跑 ==='
+dotnet build tools\UiSmokeTest\UiSmokeTest.csproj -m:1 -v:q --nologo 2>&1 | Select-String 'error' | Select-Object -First 5
+$final = Invoke-Smoke 'final'
+if ($final | Select-String '== 全部通过 ==') {
+    Write-Host '  还原成功，全部通过。'
+} else {
+    Write-Host '  ✘ 还原后没有全绿，工作区可能已损坏！'
+    $failed += '还原后未全绿'
+}
+
+Write-Host ''
+if ($failed.Count -eq 0) {
+    Write-Host '== 反证全部成立：每一条新断言都能抓住对应的错误实现 =='
+} else {
+    Write-Host "== 有 $($failed.Count) 条反证未成立: $($failed -join '; ')"
+    exit 1
+}

@@ -2,7 +2,7 @@
 
 Windows 桌面记账程序。WPF + .NET 10，单机运行，账单以按日期分层的 JSON 文件保存，不依赖数据库和网络。
 
-主窗口是一个 420×560 的无边框窗口：左侧导航栏，右侧内容区，外观支持暗色 / 亮色 / 跟随系统。
+主窗口是一个 480×640 的无边框窗口：左侧导航栏（今日 / 日历 / 统计 / 设置），右侧内容区，外观支持暗色 / 亮色 / 跟随系统。
 
 ## 功能
 
@@ -24,6 +24,15 @@ Windows 桌面记账程序。WPF + .NET 10，单机运行，账单以按日期�
 - 年视图展示 12 个月的合计。
 - 明细列表在三种视图下共用，内容分别是当天 / 当月 / 当年的流水。
 
+### 统计
+
+- 圆环图按分类看总支出去向，圆心显示总支出与笔数；每段颜色由分类名哈希决定，同一分类在任何范围、任何一次启动里都是同一种颜色。
+- 分类排行：金额、笔数、占比，条形长度取相对第一名的比例；点任意一行下钻到该分类的明细。
+- 近 12 个月支出趋势柱状图，柱高取相对最高月的比例。
+- 时间范围：本月 / 本年 / 全部，趋势不受范围限制（趋势本身就是跨范围的视图）。
+- 导出 CSV：按当前范围导出明细与合计，UTF-8 带 BOM，Excel 直接打开不乱码。
+- 三块图表都有展开动效，数据换范围或换页时重播。
+
 ### 设置
 
 - 主题：跟随系统 / 暗色 / 亮色。切换时所有颜色以 300ms 过渡到位，而不是瞬间跳变，并写入配置。
@@ -35,7 +44,7 @@ Windows 桌面记账程序。WPF + .NET 10，单机运行，账单以按日期�
 
 | 项目 | 目标框架 | 职责 |
 |------|----------|------|
-| `PaperCoin` | `net10.0-windows` | WPF 界面层：视图、ViewModel、主题渲染、自绘控件与转换器 |
+| `PaperCoin` | `net10.0-windows` | WPF 界面层：视图、ViewModel、主题渲染、自绘控件（含圆环图）与转换器 |
 | `PaperCoin.Core` | `net10.0` | 领域模型与路径常量，不依赖 WPF |
 | `PaperCoin.Service` | `net10.0` | 配置读写、主题状态、账单持久化 |
 | `PaperCoin.Setup` | — | Visual Studio 安装项目（`.vdproj`），生成 MSI 与 `setup.exe` |
@@ -48,12 +57,12 @@ PaperCoin/
 │   ├── App.xaml(.cs)               启动流程：单实例、日志、依赖注入容器、主题装载
 │   ├── MainWindow.xaml(.cs)        自绘标题栏、侧边栏导航与指示器动效
 │   ├── ThemeRenderer.cs            运行时原地替换颜色字典
-│   ├── Controls/                   SwitchToggle 等自绘控件
+│   ├── Controls/                   SwitchToggle、DonutChart 等自绘控件
 │   ├── Converters/                 值转换器
 │   ├── Icon/                       图标资源与 Iconfont.ttf
 │   ├── Themes/                     Dark / Bright / Controls / Generic
-│   ├── ViewModels/                 三个页面的 ViewModel，以及两页共用的编辑面板状态
-│   └── Views/                      三个页面、两页共用的浮层编辑面板、列表入场动效
+│   ├── ViewModels/                 四个页面的 ViewModel，以及两页共用的编辑面板状态
+│   └── Views/                      四个页面、两页共用的浮层编辑面板、列表入场动效、Motion 动效常量
 ├── PaperCoin.Core/                 领域模型与路径常量
 ├── PaperCoin.Service/              配置、主题状态、账单持久化
 ├── PaperCoin.Setup/                安装项目（生成物不入库）
@@ -126,17 +135,43 @@ MSI 规定**与快捷方式关联的图标必须是 PE 文件，且文件名扩�
 
 ### 安装路径
 
-安装位置由安装包自己保证一致，用户没有地方可以改：
+首次安装可以选择装到哪个目录，升级时自动沿用已安装的位置、不再让用户改：
 
-- 正常安装序列里的"安装文件夹"对话框已移除。MSI 里 `FolderForm` 与 `VSDCA_FolderForm_AllUsers` 都不存在，也没有任何 `ControlEvent` 会写 `TARGETDIR`。
-- 升级时 `AppSearch`（序列 100）先搜注册表 `HKCU\Software\Ksayus\PaperCoin` 的 `InstallDir`，搜到就把 `TARGETDIR` 定在那儿；`DIRCA_TARGETDIR`（序列 750，条件是 `TARGETDIR=""`）只在搜不到时才填默认值。
-- 默认值是 `[LocalAppDataFolder]PaperCoin`，即 `%LOCALAPPDATA%\PaperCoin`。本程序是每用户安装（`InstallAllUsers=False`、不提权），所以默认值必须是用户可写的位置——装到 `Program Files` 会因权限失败。
+- 正常安装序列里有"安装文件夹"对话框（MSI 里的 `FolderForm`，默认 `[ProgramFilesFolder]\PaperCoin`）。
+- 升级时 `AppSearch`（序列 100）先搜注册表 `Software\Ksayus\PaperCoin` 的 `InstallDir`，搜到就把 `TARGETDIR` 定在那儿；`DIRCA_TARGETDIR`（序列 750，条件是 `TARGETDIR=""`）只在搜不到时才填默认值。
+- `FolderForm` 只在"全新安装"时出现：VSI 生成的那个显示动作 `VSDCA_FolderForm_AllUsers` 自带条件 `Installed=""`，升级时它不跑。
 
-写入这一侧的代码在 `PaperCoin.Service/InstallLocation.cs`，程序每次启动都会把 `AppContext.BaseDirectory` 写进去。**键路径与值名是它和安装包的约定**：安装包那侧写在 `PaperCoin.Setup.vdproj` 的 `"Locator"` 节点里（节点类型 `{CF66B7F7-B7DA-4B08-A67A-233430638C9C}`，`Root` 用 VS 自己的枚举值——`3:1` 是 HKLM、`3:2` 是 HKCU）。改一处必须同步改另一处。
+**这需要提权安装（`InstallAllUsers=True`、`ALLUSERS=1`）。** 这一条不是选出来的，是工具链逼出来的：VS 安装项目里"安装文件夹"对话框的显示动作被**硬编码**成只对 `ALLUSERS=1` 生效——整份 `Microsoft.VisualStudio.InstallerProjects` 扩展（`dpplg.dll` 的字符串表）里只有 `FolderForm_AllUsers` 这一个 FolderForm 动作，没有每用户版本。所以"免提权 + 首次可选任意路径"在 VSI 里做不出来，只能在两者之间选一个。
+
+**数据目录因此搬到了 `%APPDATA%\PaperCoin`**（见下节）。装在 `Program Files` 里的程序目录普通权限写不进去，数据再跟着程序目录走就会写失败；而且路径可改之后，"数据在程序目录下"这件事本身就成了负担——用户换个安装位置，账就"看不见"了。
+
+### 安装位置的记录
+
+写入这一侧的代码在 `PaperCoin.Service/InstallLocation.cs`，程序每次启动都会把 `AppContext.BaseDirectory` 写进注册表。
+
+**键路径与值名是它和安装包的约定**：安装包那侧写在 `PaperCoin.Setup.vdproj` 的 `"Locator"` 节点里（节点类型 `{CF66B7F7-B7DA-4B08-A67A-233430638C9C}`，`Root` 用 VS 自己的枚举值——`3:1` 是 HKLM、`3:2` 是 HKCU）。改一处必须同步改另一处。
+
+1.3.0 起写 **HKLM**（每机器安装，安装时提权），安装包里配了**两个**定位器：
+
+| 顺序 | Root | 作用 |
+|---|---|---|
+| 1 | HKLM | 1.3.0 及以后的位置 |
+| 2 | HKCU | 1.2.x 留下的位置，从旧版升级时靠它认出旧路径 |
+
+`InstallLocation.Read()` 同样 HKLM 优先、HKCU 兜底，两边的优先级顺序必须一致。
 
 > VS 安装项目的这个格式没有公开 schema。上面那些节点 GUID 与字段名是从 `Microsoft.VisualStudio.InstallerProjects` 扩展的 `dpplg.dll` 里读出来的（每个 GUID 后面就跟着它的显示名），并用"构建后查 MSI 的 `RegLocator` / `AppSearch` 表"验证过。
 
-数据目录跟着程序目录走（`Environment.CurrentDirectory\PaperCoin`），所以安装位置一变，账单就会"看不见"。这也是必须锁住路径的原因。注意默认路径下它是 `%LOCALAPPDATA%\PaperCoin\PaperCoin\Bills`，多了一层同名目录——这是数据目录命名与安装目录重名的老问题，与本次改动无关。
+### 数据目录迁移
+
+1.2.x 的数据根是**程序目录**下的 `PaperCoin\`；1.3.0 起是 `%APPDATA%\PaperCoin`。不搬的话，升级上来的用户会看到一份空账——数据其实还在，只是没人去那儿找了。
+
+`PaperCoin.Service/AppDataMigration.cs` 在 `App.OnStartup` 里、**任何服务读写数据目录之前**跑一次：
+
+- 目标目录已经有账单就不动（已经搬过，或者本来就是全新安装）。
+- 旧目录找两处：当前程序目录下的 `PaperCoin\`，以及注册表里记着的上一版安装位置下的 `PaperCoin\`。升级换过安装位置时，只有后者能找到旧数据。
+- 是**复制**不是移动：旧目录原样留着，搬错了还能回头。
+- 失败（旧目录不存在、权限不足）只记一条日志，不影响启动。
 
 ### 关于 LAE
 
@@ -154,7 +189,7 @@ MSI 规定**与快捷方式关联的图标必须是 PE 文件，且文件名扩�
 
 ## 数据存储
 
-运行时数据放在**进程当前工作目录**下的 `PaperCoin/` 目录里：
+运行时数据放在 `%APPDATA%\PaperCoin\`（`Constants.AppDataFolder`）。1.2.x 时它在程序目录下，1.3.0 起搬到了用户配置目录，迁移逻辑见上文「数据目录迁移」。
 
 | 路径 | 内容 |
 |------|------|
@@ -164,7 +199,9 @@ MSI 规定**与快捷方式关联的图标必须是 PE 文件，且文件名扩�
 
 目录结构本身就是索引：查询直接枚举 `Bills/` 下的年 / 月 / 日目录，没有独立的索引文件。手工增删目录同样能被正确识别。
 
-从 Visual Studio 或 `dotnet run` 启动时，工作目录是输出目录 `PaperCoin/bin/<配置>/net10.0-windows`，数据也落在那里。也可以在设置页点“数据目录”直接打开账单文件夹。
+也可以在设置页点"数据目录"直接打开账单文件夹。
+
+> 开发时数据同样落在 `%APPDATA%\PaperCoin\`，与安装版共用（`AppDataFolder` 不再跟工作目录走）。需要一份干净数据时，把这个目录改名即可。
 
 ## 测试
 
@@ -173,7 +210,7 @@ cd tools/UiSmokeTest
 dotnet run
 ```
 
-14 项检查，覆盖主题资源键对齐、图标码位是否存在于字体、侧边栏指示器随窗口尺寸重算、三个页面的布局与交互、保存链路的串行化与增量同步、动效是否真的向 LAE 注册等。
+25 项检查，覆盖主题资源键对齐、图标码位是否存在于字体、侧边栏指示器随窗口尺寸重算、四个页面的布局与交互、保存链路的串行化与增量同步、动效是否真的向 LAE 注册、分类色板的稳定性与可解析性、仓库按分类汇总支出的口径、统计页三份派生数据（圆环 / 排行 / 趋势）与下钻、圆环弧角与占比是否一致、导出 CSV 是否带 UTF-8 BOM 等。
 
 这里不引入测试框架：需要验证的是真实布局、真实绑定和真实交互，测试框架帮不上忙。程序直接构造 View、量它的尺寸、驱动它的命令与事件，把编译期看不出来的问题（缺少的 `StaticResource`、失效的 `RelativeSource`、模板名字域解析失败、布局塌陷、绑定路径写错）逼出来。
 
