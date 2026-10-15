@@ -29,7 +29,7 @@ public partial class App : Application
     private static Mutex? _singleInstance;
 
     /// <summary>本项目在 GitHub Releases 的固定地址</summary>
-    internal const string ReleasesUrl = "https://github.com/PaperCoin/PaperCoin/releases";
+    internal const string ReleasesUrl = "https://github.com/ksayus/PaperCoin/releases";
 
     // 用 DllImport 而非 LibraryImport：后者由源生成器产出 unsafe 代码，需要在程序集级打开 AllowUnsafeBlocks
     [DllImport("user32.dll")]
@@ -53,6 +53,10 @@ public partial class App : Application
         }
 
         base.OnStartup(e);
+
+        // 迁移必须先于一切数据读写：ConfigService 的构造函数就会创建并读配置目录，
+        // 排到它后面就只能搬到一个"已经初始化过"的新目录上。
+        AppDataMigration.Run();
 
         Directory.CreateDirectory(Constants.ConfigFolder);
 
@@ -93,6 +97,7 @@ public partial class App : Application
 
         services.AddTransient<TodayBillViewModel>();
         services.AddTransient<CalenderBillViewModel>();
+        services.AddTransient<StatisticsViewModel>();
         services.AddTransient<SettingsViewModel>();
 
         Services = services.BuildServiceProvider();

@@ -68,4 +68,15 @@
     <!-- 更新源。同上：这个码位实际是“‹”左尖括号，不是下载箭头。 -->
     <sys:String x:Key="IconDownload">&#xe64e;</sys:String>
 
+    <!-- 统计。字体里没有饼图/柱状图/折线这类字形，所以和 IconDeleteGeometry 一样给矢量几何。
+
+         画法：把圆环拆成两段半圆弧线（各 180°，用两个 ArcSegment 拼回整圈），
+         中间留 0.45 的缺口，再加一根从内圈到外圈的半径线，读起来就是"一段被拎出来的扇形"。
+         坐标写在 13×13 的框里，半径 6.0、笔宽 1.2 时外缘正好 6.6，不会溢出。
+         引用方按原尺寸画，不要设 Stretch：拉伸会把 1.2px 的线宽一起缩放。 -->
+    <GeometryGroup x:Key="IconChartGeometry">
+        <PathGeometry Figures="M 9.10,2.48 A 4.6,4.6 0 1 1 4.39,2.48" />
+        <PathGeometry Figures="M 6.50,2.20 L 6.50,5.60" />
+    </GeometryGroup>
+
 </ResourceDictionary>

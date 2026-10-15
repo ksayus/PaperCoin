@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     {
         TodayBill,
         CalenderBill,
+        Statistics,
         Settings
     }
 
@@ -88,15 +89,25 @@ public partial class MainWindow : Window
     private void CalenderBtn_Click(object sender, RoutedEventArgs e)
         => GoTo(NavItem.CalenderBill, CalenderBtn);
 
+    private void StatisticsBtn_Click(object sender, RoutedEventArgs e)
+        => GoTo(NavItem.Statistics, StatisticsBtn);
+
     private void SettingsBtn_Click(object sender, RoutedEventArgs e)
         => GoTo(NavItem.Settings, SettingsBtn);
 
-    /// <summary>切换到指定导航项。指示器位置由按钮自身的布局算出，不使用硬编码像素。</summary>
+    /// <summary>
+    /// 切换到指定导航项。指示器位置由按钮自身的布局算出，不使用硬编码像素。
+    /// 统计页不订阅仓库，靠"索引版本变了才重算"决定要不要重新聚合，
+    /// 所以切到它时要显式叫一次刷新，否则记完账再切回来看到的还是旧数字。
+    /// </summary>
     private void GoTo(NavItem item, Button button)
     {
         _activeNav = item;
         NavigateTo(item.ToString());
         MoveIndicatorTo(button, animate: true);
+
+        if (item == NavItem.Statistics && MainContentArea.Child is Views.Statistics statistics)
+            _ = statistics.RefreshAsync();
     }
 
     private void NavigateTo(string pageName)
@@ -105,6 +116,7 @@ public partial class MainWindow : Window
         {
             "TodayBill" => GetOrCreatePage("TodayBill", () => new TodayBill()),
             "CalenderBill" => GetOrCreatePage("CalenderBill", () => new CalenderBill()),
+            "Statistics" => GetOrCreatePage("Statistics", () => new Statistics()),
             "Settings" => GetOrCreatePage("Settings", () => new Settings()),
             _ => null
         };
@@ -134,6 +146,9 @@ public partial class MainWindow : Window
                 break;
             case "CalenderBill":
                 page.DataContext = App.Services.GetRequiredService<CalenderBillViewModel>();
+                break;
+            case "Statistics":
+                page.DataContext = App.Services.GetRequiredService<StatisticsViewModel>();
                 break;
             case "Settings":
                 page.DataContext = App.Services.GetRequiredService<SettingsViewModel>();
@@ -169,21 +184,38 @@ public partial class MainWindow : Window
         _activeNav = pageName switch
         {
             "CalenderBill" => NavItem.CalenderBill,
+            "Statistics" => NavItem.Statistics,
             "Settings" => NavItem.Settings,
             _ => NavItem.TodayBill
         };
 
         NavigateTo(pageName);
         RepositionIndicator(animate: false);
+
+        // 与 GoTo 保持一致：按名导航也要给统计页一次刷新机会，
+        // 否则测试走的是与真实点击不同的一条路径
+        if (MainContentArea.Child is Views.Statistics statistics)
+            _ = statistics.RefreshAsync();
     }
 
     /// <summary>取侧边栏按钮，供测试以真实点击驱动导航（NavigateForTest 走 animate: false，覆盖不到过渡动画）。</summary>
     internal Button NavButtonForTest(string pageName) => pageName switch
     {
         "CalenderBill" => CalenderBtn,
+        "Statistics" => StatisticsBtn,
         "Settings" => SettingsBtn,
         _ => TodayBillBtn
     };
+
+    /// <summary>
+    /// 取当前挂载在内容区的页面，供测试断言换页真的换了。
+    /// 页面实例由 <see cref="_pageCache"/> 长期持有，不取这个引用就只能靠类型硬转。
+    /// </summary>
+    internal UserControl? FindPageForTest(string pageName)
+    {
+        _pageCache.TryGetValue(pageName, out var page);
+        return page;
+    }
 
     /// <summary>
     /// 把指示器对准指定按钮。指示器的 VerticalAlignment 为 Bottom，Y 表示相对底端的负向偏移，

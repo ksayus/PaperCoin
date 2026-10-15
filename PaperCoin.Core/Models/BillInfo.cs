@@ -39,6 +39,16 @@ public partial class BillEntry : ObservableObject
     public string DateText => Date.ToString("MM-dd");
 
     /// <summary>
+    /// 分类对应的主题颜色键，供卡片上的色条使用。
+    /// <para>
+    /// 只给键名不给颜色：颜色字面量归主题字典所有，界面用转换器解析，
+    /// 这样主题切换时色条会跟着一起过渡。归一化（大小写、空白、空分类）
+    /// 由 <see cref="CategoryPalette"/> 独占，各处不重复实现。
+    /// </para>
+    /// </summary>
+    public string CategoryColorKey => CategoryPalette.ThemeKeyOf(Category);
+
+    /// <summary>
     /// 带符号金额文本。正负号手动补，不用 <c>N2</c> 格式串：其对负数的输出受区域设置影响。
     /// </summary>
     public string AmountText => Amount >= 0
@@ -50,6 +60,9 @@ public partial class BillEntry : ObservableObject
     partial void OnAmountChanged(decimal value) => OnPropertyChanged(nameof(AmountText));
 
     partial void OnDateChanged(DateOnly value) => OnPropertyChanged(nameof(DateText));
+
+    /// <summary>改了分类要连带通知色条，否则卡片会一直用旧颜色。</summary>
+    partial void OnCategoryChanged(string? value) => OnPropertyChanged(nameof(CategoryColorKey));
 }
 
 public class TermsFile

@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using PaperCoin.Core;
 using PaperCoin.Core.Models;
 using Serilog;
@@ -26,6 +26,9 @@ public class BillRepository
     private readonly Dictionary<DateOnly, List<BillEntry>> _index = [];
 
     private bool _indexStale = true;
+
+    /// <summary>索引版本号，见 <see cref="Revision"/>。写入只在 UI 线程发生，读用 volatile 保证可见性。</summary>
+    private volatile int _revision;
 
     // ---- 查询 ----
 
@@ -101,6 +104,57 @@ public class BillRepository
     }
 
     /// <summary>
+    /// 指定日期区间内**按分类汇总的支出**，金额降序，金额相同按分类名排。
+    /// <para>
+    /// 只统计支出（金额为负），返回值里的金额取绝对值，语义见 <see cref="CategoryTotal"/>。
+    /// 收支口径归领域层解释：正负约定写在 README 里，放界面层会让同一条约定散在多处。
+    /// </para>
+    /// <para>首尾两天都算在内。分类名做大小写不敏感归并，空白归入 <c>未分类</c>。</para>
+    /// </summary>
+    public async Task<IReadOnlyList<CategoryTotal>> GetCategoryExpenseAsync(
+        DateOnly from, DateOnly to, CancellationToken ct = default)
+    {
+        if (to < from) (from, to) = (to, from);
+
+        await EnsureIndexAsync(ct);
+
+        lock (_index)
+        {
+            return _index
+                .Where(kv => kv.Key >= from && kv.Key <= to)
+                .SelectMany(kv => kv.Value)
+                .Where(e => e.Amount < 0)
+                .GroupBy(e => Core.CategoryPalette.Normalize(e.Category), StringComparer.OrdinalIgnoreCase)
+                .Select(g => new CategoryTotal(g.Key, g.Sum(e => -e.Amount), g.Count()))
+                .OrderByDescending(t => t.Expense)
+                .ThenBy(t => t.Category, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+    }
+
+    /// <summary>
+    /// 作废内存索引，下一次查询按磁盘重建。
+    /// 正常写路径（<see cref="SaveAsync"/> / <see cref="UpsertEntryAsync"/> / <see cref="DeleteDayAsync"/>）
+    /// 已经在维护索引，不需要调用；只有"磁盘被本进程以外的东西改过"时才需要。
+    /// </summary>
+    public void InvalidateIndex()
+    {
+        _indexStale = true;
+        _revision++;
+    }
+
+    /// <summary>
+    /// 索引版本号，单调递增。统计这类派生数据用它判断"要不要重算"：
+    /// 每次切回页面都重算全量聚合是白做的，而每次都不算是错的。
+    /// <para>
+    /// 磁盘内容被改动的每条路径都会推它：三条写路径直接推，<see cref="InvalidateIndex"/> 推。
+    /// 只推"索引重建"是不够的 —— 重建只发生一次，之后的编辑不再改这个号，
+    /// 以它为失效依据会让统计页永远停在第一次的样子。
+    /// </para>
+    /// </summary>
+    public int Revision => _revision;
+
+    /// <summary>
     /// 账单里出现过的全部分类，按用过的次数从多到少排，次数相同按名称排。
     /// 汇总自内存索引，不额外读盘；同名分类只保留首次出现时的写法。
     /// </summary>
@@ -148,6 +202,8 @@ public class BillRepository
                 foreach (var (date, list) in byDate)
                     _index[date] = list;
             }
+
+            _revision++;
         }
         finally
         {
@@ -175,6 +231,8 @@ public class BillRepository
 
             // 磁盘已经是空的，索引跟着改掉即可
             lock (_index) _index.Remove(date);
+
+            _revision++;
 
             return true;
         }
@@ -206,6 +264,8 @@ public class BillRepository
                 await RemoveEntryFromDayAsync(old, entry.Id, ct);
 
             await MergeEntryIntoDayAsync(entry, ct);
+
+            _revision++;
 
             return true;
         }

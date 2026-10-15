@@ -31,9 +31,31 @@ internal static class Program
     /// <summary>主内容区宽度 = 窗口 − 侧边栏 50</summary>
     private const double ContentWidth = WindowWidth - 50;
 
+    /// <summary>跨进程探针模式的命令行开关，见 <see cref="Main"/></summary>
+    private const string ColorProbeArgument = "--color-probe";
+
+    /// <summary>
+    /// 探针样本。刻意包含中文、大小写、带空格与空值：
+    /// 哈希实现换一种写法时，只要其中一项变了，两次进程的输出就会不同。
+    /// </summary>
+    private static readonly string?[] ColorProbeCategories =
+        [null, "", "餐饮", "交通", "购物", "居住", "娱乐", "医疗", "Food", "FOOD", " 餐饮 "];
+
     [STAThread]
     private static int Main()
     {
+        // 跨进程探针模式：只打印"分类 → 颜色键"的映射就退出。
+        // 第 20 项要靠它比较两次独立进程的输出 —— 颜色映射如果用了
+        // string.GetHashCode，进程内两次调用一致、跨进程却不一样，
+        // 同一个进程里无论怎么断言都发现不了。
+        if (Environment.GetCommandLineArgs().Contains(ColorProbeArgument))
+        {
+            foreach (var name in ColorProbeCategories)
+                Console.WriteLine($"{name}={PaperCoin.Core.CategoryPalette.ThemeKeyOf(name)}");
+
+            return 0;
+        }
+
         var app = new Application
         {
             // 默认 ShutdownMode 会在最后一个窗口关闭时退出进程。侧边栏测试要
@@ -71,6 +93,12 @@ internal static class Program
             failures += Check("17. 安装位置记录", TestInstallLocation);
             failures += Check("18. View 引用的图标资源键都已定义", TestIconReferences);
             failures += Check("19. 快捷方式图标修正", TestShortcutRepair);
+            failures += Check("20. 分类色板：稳定、可解析", TestCategoryPalette);
+            failures += Check("21. 仓库按分类汇总支出", TestCategoryExpenseAggregation);
+            failures += Check("22. 统计口径：范围 / 排行 / 趋势 / 下钻 / CSV", TestStatisticsAggregation);
+            failures += Check("23. 圆环几何与占比一致", TestDonutGeometry);
+            failures += Check("24. 统计页接入导航并播放展开动效", TestStatisticsPage);
+            failures += Check("25. 统计 CSV 带 BOM", TestStatisticsCsv);
         });
 
         Console.WriteLine();
@@ -865,8 +893,11 @@ internal static class Program
 
         AssertNoCollapse(view, "CalenderBill(日)");
 
+        // 按名字认卡片，不按"DataContext 是 BillEntry 的 Border"：
+        // DataContext 沿可视树继承，模板里任何新的 Border 都会命中，
+        // 加一个分类色条就会让计数翻倍。
         var entryCards = FindAllCore<Border>(view)
-            .Where(b => b.DataContext is PaperCoin.Core.Models.BillEntry)
+            .Where(b => b.Name == "EntryCard")
             .ToList();
 
         Report($"日历明细卡片数 = {entryCards.Count}（流水 {vm.Entries.Count} 条）");
@@ -1588,6 +1619,7 @@ internal static class Program
         services.AddSingleton<BillRepository>();
         services.AddTransient<TodayBillViewModel>();
         services.AddTransient<CalenderBillViewModel>();
+        services.AddTransient<StatisticsViewModel>();
         services.AddTransient<SettingsViewModel>();
 
         PaperCoin.App.Services = services.BuildServiceProvider();
@@ -1689,8 +1721,56 @@ internal static class Program
         }
     }
 
-    private static T? FindField<T>(object owner, string name) where T : class
+    /// <summary>按类型深度优先收集可视后代，用于断言"某类元素真的画出来了"</summary>
+    private static void CollectVisuals<T>(DependencyObject root, List<T> into) where T : DependencyObject
     {
+        int count = VisualTreeHelper.GetChildrenCount(root);
+
+        for (int i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+
+            if (child is T match) into.Add(match);
+
+            CollectVisuals(child, into);
+        }
+    }
+
+    /// <summary>
+    /// 等一个任务完成，同时继续泵消息循环。
+    /// <para>
+    /// 整个套件跑在 <c>Application.Current.Dispatcher.Invoke</c> 里，也就是 UI 线程上。
+    /// 直接 <c>.GetAwaiter().GetResult()</c> 会**死锁**：仓库的 await 续体要回到 UI 线程的
+    /// 同步上下文，而 UI 线程正卡在阻塞等待上。先决条件是任务已经开始（不是刚 new 出来
+    /// 还没跑到第一个 await 的），所以这里最后补一次泵，让刚启动的任务有机会推进。
+    /// </para>
+    /// </summary>
+    private static void WaitFor(Task task, int timeoutMs = 30_000)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        while (!task.IsCompleted && sw.ElapsedMilliseconds < timeoutMs)
+            Pump();
+
+        if (task.IsFaulted)
+            throw task.Exception!.GetBaseException();
+
+        if (!task.IsCompleted)
+            throw new Exception($"等待任务超时（{timeoutMs}ms）");
+    }
+
+    /// <summary>等一批任务完成，同样继续泵消息循环</summary>
+    private static void WaitFor(IEnumerable<Task> tasks, int timeoutMs = 30_000)
+        => WaitFor(Task.WhenAll(tasks), timeoutMs);
+
+    /// <summary>等一个带返回值的任务完成并取回结果，同样继续泵消息循环</summary>
+    private static T RoundTrip<T>(Task<T> task, int timeoutMs = 30_000)
+    {
+        WaitFor(task, timeoutMs);
+        return task.Result;
+    }
+
+    private static T? FindField<T>(object owner, string name) where T : class    {
         var field = owner.GetType().GetField(name,
             System.Reflection.BindingFlags.Instance |
             System.Reflection.BindingFlags.NonPublic |
@@ -1848,16 +1928,17 @@ internal static class Program
             ])));
         }
 
-        // WaitAll 遇到失败的任务会直接抛 AggregateException，把下面逐个报告的那段盖掉，
-        // 所以这里只取有没有等完，失败详情交给下面。
+        // 任务失败时 WhenAll 会抛，那是预期的信号；这里只关心有没有等完，
+        // 失败详情交给下面逐个报告。
         bool finished;
         try
         {
-            finished = Task.WaitAll([.. tasks], 30_000);
-        }
-        catch (AggregateException)
-        {
+            WaitFor(tasks, 30_000);
             finished = true;
+        }
+        catch (Exception)
+        {
+            finished = tasks.All(t => t.IsCompleted);
         }
 
         var failures = tasks.Where(t => t.IsFaulted).ToList();
@@ -2491,34 +2572,48 @@ internal static class Program
 
     /// <summary>
     /// 程序必须把安装位置写进注册表。安装包的 "Locator" 节点搜的就是这个键，搜到才沿用旧路径；
-    /// 键名或值名对不上、或写不进去，升级就会装到第二个目录，而程序的数据目录就在程序目录下 ——
-    /// 用户会以为账单丢了。
-    /// 注意：测试进程的基目录是 bin 目录，所以这里写进去的是错的值，测完必须还原，
-    /// 否则留在注册表里会让下一次升级真的装错地方。
+    /// 键名或值名对不上、或写不进去，升级就会装到第二个目录。
+    /// <para>
+    /// 1.3.0 起写的是 HKLM（每机器安装），并且**必须提权**才写得进去。测试进程通常不是
+    /// 管理员，所以这里分两条路：能写就写进去核对（并原样还原，测试进程的基目录是 bin 目录，
+    /// 留下去会让下一次升级真的装错地方），写不进去就只核对"键与值名"这条与安装包的约定，
+    /// 并明确报告"因权限跳过了写入核对"，而不是假装通过。
+    /// </para>
     /// </summary>
     private static void TestInstallLocation()
     {
         const string keyPath = PaperCoin.Service.InstallLocation.KeyPath;
         const string valueName = PaperCoin.Service.InstallLocation.ValueName;
 
-        string? original = null;
-        bool keyExisted;
+        if (string.IsNullOrEmpty(keyPath) || string.IsNullOrEmpty(valueName))
+            throw new Exception("键路径或值名是空的，安装包搜不到任何东西");
 
-        using (var probe = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(keyPath))
+        bool elevated = IsElevated();
+
+        using var probe = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(keyPath);
+        var original = probe?.GetValue(valueName) as string;
+
+        Report($"HKCU 旧键（1.2.x 遗留，1.3.0 迁移用）: " +
+               $"{(Microsoft.Win32.Registry.CurrentUser.OpenSubKey(keyPath) is null ? "无" : "有")}");
+        Report($"HKLM\\{keyPath}\\{valueName} 当前 = {original ?? "(空)"}");
+        Report($"进程是否提权: {elevated}");
+
+        if (!elevated)
         {
-            keyExisted = probe is not null;
-            original = probe?.GetValue(valueName) as string;
+            // 不提权就只能核对约定本身。Code 侧的 Read() 优先 HKLM、回落 HKCU 这条逻辑
+            // 由 1.2.x 升级兼容性保证，见 InstallLocation.Read 的注释。
+            Report("未提权，跳过写入核对（Record 写 HKLM，普通权限写不进去）");
+            return;
         }
 
         try
         {
             PaperCoin.Service.InstallLocation.Record();
 
-            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(keyPath)
-                ?? throw new Exception($"没有写入注册表键 HKCU\\{keyPath}");
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(keyPath)
+                ?? throw new Exception($"没有写入注册表键 HKLM\\{keyPath}");
 
             var recorded = key.GetValue(valueName) as string;
-            Report($"HKCU\\{keyPath}\\{valueName} = {recorded ?? "(空)"}");
 
             if (string.IsNullOrEmpty(recorded))
                 throw new Exception("安装位置没有写进注册表，升级时安装包搜不到旧路径");
@@ -2527,21 +2622,36 @@ internal static class Program
 
             if (!string.Equals(recorded, expected, StringComparison.OrdinalIgnoreCase))
                 throw new Exception($"记录的位置与实际不符: {recorded} vs {expected}");
+
+            // Read() 必须优先给 HKLM 的值：升级时安装包搜的也是 HKLM
+            if (!string.Equals(PaperCoin.Service.InstallLocation.Read(), recorded, StringComparison.OrdinalIgnoreCase))
+                throw new Exception("Read() 没有优先返回 HKLM 记录的位置");
+
+            Report($"写入并读回成功: {recorded}");
         }
         finally
         {
-            if (keyExisted && original is not null)
+            // 测试进程的基目录是 bin 目录，这个值必须还原，否则下一次升级会装到那儿去
+            if (original is not null)
             {
-                using var restore = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(keyPath);
+                using var restore = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(keyPath);
                 restore.SetValue(valueName, original);
                 Report($"已还原为 {original}");
             }
             else
             {
-                Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(keyPath, throwOnMissingSubKey: false);
-                Report("测试前没有这个键，已清理");
+                Microsoft.Win32.Registry.LocalMachine.DeleteSubKeyTree(keyPath, throwOnMissingSubKey: false);
+                Report("测试前没有这个值，已清理");
             }
         }
+    }
+
+    /// <summary>当前进程是否以管理员身份运行</summary>
+    private static bool IsElevated()
+    {
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        return new System.Security.Principal.WindowsPrincipal(identity)
+            .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
     }
 
     /// <summary>摘掉字典里所有画刷的过渡动画，让资源回到静态值</summary>
@@ -2576,8 +2686,772 @@ internal static class Program
         return Color.FromArgb(pixel[3], pixel[2], pixel[1], pixel[0]);
     }
 
-    private static int Check(string name, Action body)
+    // ---- 20. 分类色板 ----
+
+    /// <summary>
+    /// 分类到颜色的映射必须是**稳定**的：同一个分类在任何范围、任何一次启动里都得是同一个颜色。
+    /// 用 string.GetHashCode 实现时进程内看着正常、重启后整套配色会换一遍，
+    /// 所以这里连"同一次运行里两次调用一致"和"大小写/空格不改变结果"一起断言。
+    /// </summary>
+    private static void TestCategoryPalette()
     {
+        var samples = new[] { "餐饮", "交通", "购物", "居住", "娱乐", "医疗", "工资", "other", "OTHER", " 餐饮 " };
+
+        foreach (var name in samples)
+        {
+            var first = PaperCoin.Core.CategoryPalette.ThemeKeyOf(name);
+            var second = PaperCoin.Core.CategoryPalette.ThemeKeyOf(name);
+
+            if (!string.Equals(first, second, StringComparison.Ordinal))
+                throw new Exception($"同一分类两次调用返回不同颜色键: {name} -> {first} / {second}");
+        }
+
+        // 大小写与首尾空格必须归一到同一个键，否则账单里 "Food" 与 "food" 会分成两种颜色
+        var lower = PaperCoin.Core.CategoryPalette.ThemeKeyOf("food");
+        var upper = PaperCoin.Core.CategoryPalette.ThemeKeyOf("FOOD");
+        var padded = PaperCoin.Core.CategoryPalette.ThemeKeyOf("  food  ");
+
+        if (lower != upper || lower != padded)
+            throw new Exception($"大小写或空格改变了分类颜色: food={lower} FOOD={upper} \"  food  \"={padded}");
+
+        // 空分类固定落在未分类色，不参与哈希
+        foreach (var blank in new string?[] { null, "", "   " })
+        {
+            var key = PaperCoin.Core.CategoryPalette.ThemeKeyOf(blank);
+            if (key != PaperCoin.Core.CategoryPalette.ThemeKeyOfSlot(PaperCoin.Core.CategoryPalette.SlotCount))
+                throw new Exception($"空白分类没有落到未分类色: {key}");
+        }
+
+        if (PaperCoin.Core.CategoryPalette.SlotCount <= 1)
+            throw new Exception("槽位数退化成了 1，所有分类会同色");
+
+        var allKeys = PaperCoin.Core.CategoryPalette.AllThemeKeys;
+        Report($"槽位 {PaperCoin.Core.CategoryPalette.SlotCount} 个, 颜色键 {allKeys.Count} 个: {string.Join(", ", allKeys)}");
+
+        // 每个颜色键都必须在两本主题字典里可解析。CategoryPalette 只产出键名，解析失败时
+        // DynamicResource 与转换器都是静默回退，症状是"某个分类没有颜色"且没有任何报错。
+        var dark = LoadDict("/Themes/Dark.xaml");
+        var bright = LoadDict("/Themes/Bright.xaml");
+
+        var missing = new List<string>();
+        foreach (var key in allKeys)
+        {
+            if (dark[key] is not SolidColorBrush) missing.Add($"Dark.{key}");
+            if (bright[key] is not SolidColorBrush) missing.Add($"Bright.{key}");
+        }
+
+        if (missing.Count > 0)
+            throw new Exception("主题字典缺少分类颜色: " + string.Join(", ", missing));
+
+        // 颜色必须互不相同：撞色会让圆环上相邻两段分不出来
+        var distinct = allKeys.Select(k => ((SolidColorBrush)dark[k]).Color).Distinct().Count();
+        Report($"Dark 下 {allKeys.Count} 个键对应 {distinct} 种颜色");
+
+        if (distinct != allKeys.Count)
+            throw new Exception($"分类颜色有重复: {allKeys.Count} 个键只有 {distinct} 种颜色");
+
+        // 跨进程稳定性。同一进程里两次调用一致并不说明问题：
+        // 用 string.GetHashCode 实现时进程内稳定、每次启动却换一套配色，
+        // 那时用户看到的是"重启一次，同一个分类换了个颜色"。
+        AssertStableAcrossProcesses();
+    }
+
+    /// <summary>
+    /// 起两次独立进程，比对"分类 → 颜色键"的映射。两次必须完全一致。
+    /// <para>
+    /// 这是唯一能抓住 <c>string.GetHashCode</c> 那种每进程随机化的办法：
+    /// 它在同一个进程里是稳定的，本地断言天然看不见。
+    /// </para>
+    /// </summary>
+    private static void AssertStableAcrossProcesses()
+    {
+        var first = RunColorProbe();
+        var second = RunColorProbe();
+
+        Report($"跨进程探针: 第一次 {first.Count} 行, 第二次 {second.Count} 行");
+
+        if (first.Count == 0)
+            throw new Exception("跨进程探针没有输出，探针模式可能没生效");
+
+        if (first.Count != second.Count)
+            throw new Exception($"两次探针输出行数不同: {first.Count} vs {second.Count}");
+
+        for (int i = 0; i < first.Count; i++)
+        {
+            if (first[i] != second[i])
+                throw new Exception(
+                    $"同一分类在两次进程里拿到了不同颜色（哈希不稳定）: {first[i]} vs {second[i]}");
+        }
+    }
+
+    /// <summary>跑一次探针子进程，返回它的每一行输出</summary>
+    private static List<string> RunColorProbe()
+    {
+        // 用当前可执行文件本身：测试宿主是 exe，探针模式在 Main 开头就返回了，
+        // 不会再起窗口、也不会碰账单数据。
+        var exe = Environment.ProcessPath
+            ?? throw new Exception("取不到当前进程的可执行文件路径");
+
+        var startInfo = new System.Diagnostics.ProcessStartInfo(exe, ColorProbeArgument)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        using var process = System.Diagnostics.Process.Start(startInfo)
+            ?? throw new Exception("无法启动探针子进程");
+
+        var output = process.StandardOutput.ReadToEnd();
+        process.WaitForExit(30_000);
+
+        if (process.ExitCode != 0)
+            throw new Exception($"探针子进程退出码 {process.ExitCode}: {process.StandardError.ReadToEnd()}");
+
+        return [.. output
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.Trim())];
+    }
+
+    // ---- 21. 仓库按分类汇总支出 ----
+
+    /// <summary>
+    /// 汇总必须**只算支出**并把金额取成正数。收入混进来会让"消费占比"这件事直接失真，
+    /// 而且因为金额是正数、混进来时看不出来，所以这条断言要带上收入数据一起跑。
+    /// </summary>
+    private static void TestCategoryExpenseAggregation()
+    {
+        DrainSaves();
+        ResetBillsData();
+
+        var repo = NewRepository();
+
+        var from = DateOnly.FromDateTime(DateTime.Today.AddDays(-60));
+        var to = DateOnly.FromDateTime(DateTime.Today);
+        var before = from.AddDays(-1);
+        var after = to.AddDays(1);
+
+        var entries = new List<PaperCoin.Core.Models.BillEntry>
+        {
+            // 同一分类、两条记录：必须合并成一条，金额与笔数都累加
+            Entry(from, "午饭", -50m, "餐饮"),
+            Entry(from.AddDays(3), "晚饭", -30m, "餐饮"),
+            // 大小写不同的同一分类：必须归并
+            Entry(from.AddDays(5), "打车", -20m, "交通"),
+            Entry(from.AddDays(6), "地铁", -10m, "交通"),
+            // 收入：绝不能被算进支出
+            Entry(from.AddDays(7), "工资", 1000m, "工资"),
+            // 没有分类
+            Entry(from.AddDays(8), "忘了记", -5m, null),
+            // 边界外：起始日之前、结束日之后，都不该进来
+            Entry(before, "范围前", -999m, "范围外"),
+            Entry(after, "范围后", -999m, "范围外")
+        };
+
+        WaitFor(entries.GroupBy(e => e.Date).Select(g => repo.SaveAsync(g.ToList())));
+
+        DrainSaves();
+
+        var result = RoundTrip(repo.GetCategoryExpenseAsync(from, to));
+
+        Report("汇总: " + string.Join(" | ",
+            result.Select(r => $"{r.Category}={r.Expense:0.##}({r.Count}笔)")));
+
+        if (result.Any(r => r.Category == "工资"))
+            throw new Exception("收入分类 工资 混进了支出汇总");
+
+        if (result.Any(r => r.Category == "范围外"))
+            throw new Exception("日期区间外的记录混进了汇总（首尾两天之外的没被排除）");
+
+        var food = result.FirstOrDefault(r => r.Category == "餐饮")
+            ?? throw new Exception("找不到 餐饮 的汇总");
+
+        if (food.Expense != 80m)
+            throw new Exception($"餐饮 金额应为 80（−50 与 −30 的绝对值之和），实际 {food.Expense}");
+
+        if (food.Count != 2)
+            throw new Exception($"餐饮 笔数应为 2，实际 {food.Count}");
+
+        var traffic = result.FirstOrDefault(r => r.Category == "交通")
+            ?? throw new Exception("找不到 交通 的汇总");
+
+        if (traffic.Expense != 30m)
+            throw new Exception($"交通 金额应为 30，实际 {traffic.Expense}");
+
+        if (result.Any(r => r.Expense <= 0))
+            throw new Exception("汇总金额必须全为正数（取绝对值），出现了非正数");
+
+        if (result[0].Category != "餐饮")
+            throw new Exception($"没有按金额降序排: 第一条是 {result[0].Category}");
+
+        // 空分类要归到"未分类"，不能丢掉
+        var blank = result.FirstOrDefault(r => r.Category == PaperCoin.Core.CategoryPalette.Uncategorized)
+            ?? throw new Exception("没有分类的流水被丢掉了");
+
+        if (blank.Expense != 5m)
+            throw new Exception($"未分类金额应为 5，实际 {blank.Expense}");
+
+        // 索引版本号必须随写入前进：统计页靠它判断要不要重算，不动的话永远显示旧数字
+        int revision = repo.Revision;
+        WaitFor(repo.SaveAsync([Entry(to, "新增一笔", -1m, "测试")]));
+        DrainSaves();
+
+        if (repo.Revision == revision)
+            throw new Exception("写入之后索引版本号没有前进，统计页会一直显示旧数据");
+
+        Report($"索引版本号 {revision} -> {repo.Revision}");
+
+        DrainSaves();
+        ResetBillsData();
+    }
+
+    // ---- 22. 统计口径 ----
+
+    /// <summary>
+    /// 统计页的三份派生数据（圆环 / 排行 / 趋势）必须来自同一次聚合，口径一致。
+    /// 这里跨越两个月造数，好让"本月"与"本年"真的选出不同结果 ——
+    /// 数据全落在同一个月时，范围切换写错也看不出来。
+    /// </summary>
+    private static void TestStatisticsAggregation()
+    {
+        DrainSaves();
+        ResetBillsData();
+
+        var repo = NewRepository();
+        var today = DateOnly.FromDateTime(DateTime.Today);
+
+        var expected = SeedStatisticsData(repo, today);
+
+        var vm = new StatisticsViewModel(repo);
+        WaitFor(vm.ReloadNowAsync());
+
+        // 默认范围是本月
+        if (!vm.IsMonthRange)
+            throw new Exception("统计页默认范围不是本月");
+
+        Report($"范围 {vm.RangeText}: 支出 {vm.TotalExpenseText} 收入 {vm.TotalIncomeText} {vm.EntryCountText}");
+        Report("排行: " + string.Join(" | ",
+            vm.RankRows.Select(r => $"{r.Label}={r.Amount:0.##}({r.ShareText})")));
+
+        var monthFood = vm.RankRows.FirstOrDefault(r => r.Label == "餐饮")
+            ?? throw new Exception("本月排行里没有 餐饮");
+
+        if (monthFood.Amount != expected.MonthFood)
+            throw new Exception($"本月餐饮应为 {expected.MonthFood}，实际 {monthFood.Amount}");
+
+        if (monthFood.Count != expected.MonthFoodCount)
+            throw new Exception($"本月餐饮笔数应为 {expected.MonthFoodCount}，实际 {monthFood.Count}");
+
+        if (vm.TotalExpense != expected.MonthExpense)
+            throw new Exception($"本月支出合计应为 {expected.MonthExpense}，实际 {vm.TotalExpense}");
+
+        if (vm.TotalIncome != expected.MonthIncome)
+            throw new Exception($"本月收入合计应为 {expected.MonthIncome}，实际 {vm.TotalIncome}");
+
+        // 排行必须降序，且第一条是金额最大的
+        for (int i = 1; i < vm.RankRows.Count; i++)
+        {
+            if (vm.RankRows[i - 1].Amount < vm.RankRows[i].Amount)
+                throw new Exception($"排行没有按金额降序: 第 {i} 行 {vm.RankRows[i].Label} 比前一行大");
+        }
+
+        if (vm.RankRows[0].BarFraction != 1.0)
+            throw new Exception($"第一名的条形占比应为 1.0，实际 {vm.RankRows[0].BarFraction}");
+
+        // 图例不能超过限制，且必须是圆环的前几段
+        if (vm.LegendRows.Count > 5)
+            throw new Exception($"图例超过 5 行: {vm.LegendRows.Count}");
+
+        if (vm.LegendRows.Count > vm.Segments.Count)
+            throw new Exception("图例行数多于圆环分段数");
+
+        for (int i = 0; i < vm.LegendRows.Count; i++)
+        {
+            if (!ReferenceEquals(vm.LegendRows[i], vm.Segments[i]))
+                throw new Exception($"图例第 {i} 行不是圆环的同一段，颜色会对不上");
+        }
+
+        // 占比之和必须接近 1
+        double share = vm.RankRows.Sum(r => r.Share);
+        if (Math.Abs(share - 1.0) > 0.001)
+            throw new Exception($"排行占比之和应为 1，实际 {share:0.####}");
+
+        // 切到"本年"：应看到 12 个月前的另一笔餐饮
+        vm.ShowYearCommand.Execute(null);
+        WaitFor(vm.ReloadNowAsync());
+
+        Report($"范围 {vm.RangeText}: 支出 {vm.TotalExpenseText}，餐饮 {vm.RankRows.First(r => r.Label == "餐饮").Amount:0.##}");
+
+        if (!vm.IsYearRange)
+            throw new Exception("切换到本年后 IsYearRange 仍为假");
+
+        var yearFood = vm.RankRows.First(r => r.Label == "餐饮");
+
+        if (yearFood.Amount != expected.YearFood)
+            throw new Exception($"本年餐饮应为 {expected.YearFood}（本月 + 去年的），实际 {yearFood.Amount}");
+
+        // 趋势与范围无关，永远是 12 个月
+        if (vm.TrendBars.Count != 12)
+            throw new Exception($"趋势柱应为 12 根，实际 {vm.TrendBars.Count}");
+
+        if (vm.TrendBars.Any(b => b.HeightFraction < 0 || b.HeightFraction > 1))
+            throw new Exception("趋势柱高度占比超出 [0,1]");
+
+        if (vm.TrendBars[^1].Amount != expected.MonthExpense)
+            throw new Exception($"趋势最后一根应是本月支出 {expected.MonthExpense}，实际 {vm.TrendBars[^1].Amount}");
+
+        Report($"趋势最高: {vm.PeakMonthText}");
+
+        // 下钻：点餐饮应只列出餐饮的支出
+        var focusRow = vm.RankRows.First(r => r.Label == "餐饮");
+        vm.OpenFocusCommand.Execute(focusRow);
+        Pump();
+
+        if (!vm.IsFocusOpen)
+            throw new Exception("下钻后面板没有打开");
+
+        if (vm.FocusEntries.Count != expected.YearFoodCount)
+            throw new Exception($"本年餐饮应有 {expected.YearFoodCount} 笔，实际 {vm.FocusEntries.Count}");
+
+        if (vm.FocusEntries.Any(e => e.Amount >= 0))
+            throw new Exception("下钻明细里混进了收入");
+
+        if (vm.FocusEntries.Any(e => PaperCoin.Core.CategoryPalette.Normalize(e.Category) != "餐饮"))
+            throw new Exception("下钻明细里混进了别的分类");
+
+        Report($"下钻 {vm.FocusTitle}: {vm.FocusSummaryText}");
+
+        vm.CloseFocusCommand.Execute(null);
+        if (vm.IsFocusOpen)
+            throw new Exception("关闭下钻后面板仍然打开");
+
+        // 切换范围时下钻若已失效必须自动关闭，否则面板会停在"该分类在此范围内没有记录"
+        vm.OpenFocusCommand.Execute(focusRow);
+        vm.ShowMonthCommand.Execute(null);
+        WaitFor(vm.ReloadNowAsync());
+
+        DrainSaves();
+        ResetBillsData();
+    }
+
+    // ---- 23. 圆环几何 ----
+
+    /// <summary>
+    /// 弧线的角度必须与占比成正比。刻意选"不平均"的占比（50/30/20），
+    /// 因为平均分配的实现也能通过等分数据的断言。
+    /// </summary>
+    private static void TestDonutGeometry()
+    {
+        var segments = new List<DonutSegment>
+        {
+            new() { Label = "A", Amount = 50m, Fraction = 0.5, ColorKey = "CategoryColor01", Count = 1 },
+            new() { Label = "B", Amount = 30m, Fraction = 0.3, ColorKey = "CategoryColor02", Count = 1 },
+            new() { Label = "C", Amount = 20m, Fraction = 0.2, ColorKey = "CategoryColor03", Count = 1 }
+        };
+
+        var window = new Window
+        {
+            Width = 200,
+            Height = 200,
+            WindowStyle = WindowStyle.None,
+            ShowInTaskbar = false,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -10000,
+            Top = -10000
+        };
+
+        var chart = new PaperCoin.Controls.DonutChart
+        {
+            Width = 150,
+            Height = 150,
+            RingThickness = 26,
+            ItemsSource = segments
+        };
+
+        window.Content = chart;
+        window.Show();
+        Pump();
+        chart.UpdateLayout();
+
+        var sweeps = chart.SegmentSweeps;
+        Report($"诊断: ActualSize={chart.ActualWidth:0.#}×{chart.ActualHeight:0.#} " +
+               $"VisualChildren={VisualTreeHelper.GetChildrenCount(chart)} RenderSize={chart.RenderSize.Width:0.#}×{chart.RenderSize.Height:0.#}");
+        Report($"诊断: {chart.LastRebuildDiagnostic}");
+        Report("弧角(度): " + string.Join(", ", sweeps.Select(s => (s * 180 / Math.PI).ToString("0.0"))));
+
+        if (sweeps.Count != 3)
+            throw new Exception($"应画出 3 段弧，实际 {sweeps.Count}");
+
+        // 留缝从每段末尾扣掉，所以总角度略小于 360；用比例而不是绝对值断言
+        double total = sweeps.Sum();
+
+        if (total <= 0 || total > Math.PI * 2 + 0.001)
+            throw new Exception($"弧角总和异常: {total:0.###} 弧度");
+
+        double[] share = [sweeps[0] / total, sweeps[1] / total, sweeps[2] / total];
+
+        Report($"归一化占比: {share[0]:P1} / {share[1]:P1} / {share[2]:P1}");
+
+        if (Math.Abs(share[0] - 0.5) > 0.02 || Math.Abs(share[1] - 0.3) > 0.02 || Math.Abs(share[2] - 0.2) > 0.02)
+            throw new Exception("扇区角度与占比不符（可能是平均分配）");
+
+        // 每一段都得真的拿到画刷：颜色是 DynamicResource，键写错时静默无描边
+        var paths = new List<System.Windows.Shapes.Path>();
+        CollectVisuals(chart, paths);
+
+        if (paths.Count != 3)
+            throw new Exception($"可视子元素里的弧线数不是 3，实际 {paths.Count}");
+
+        foreach (var path in paths)
+        {
+            if (path.Stroke is not SolidColorBrush brush || brush.Color.A == 0)
+                throw new Exception("弧线没有解析出描边画刷，分类颜色键在主题字典里找不到");
+        }
+
+        chart.RevealAll();
+        Pump();
+
+        if (!LAE.LAEngine.IsRunning("StatisticsDonut"))
+            throw new Exception("圆环展开没有向 LAE 注册（动效没接上）");
+
+        window.Close();
+        Pump();
+    }
+
+    // ---- 24. 统计页接入导航 ----
+
+    /// <summary>
+    /// 统计页必须在真实窗口里挂得上、量得出、切得动，并且展开动效真的向 LAE 注册过。
+    /// 侧边栏第四个按钮的指示器定位也在这里复核：它是按按钮布局算的，加一项后不该失准。
+    /// </summary>
+    private static void TestStatisticsPage()
+    {
+        DrainSaves();
+        ResetBillsData();
+
+        var repo = App.Services.GetRequiredService<BillRepository>();
+        var expected = SeedStatisticsData(repo, DateOnly.FromDateTime(DateTime.Today));
+
+        var window = new MainWindow
+        {
+            Width = WindowWidth,
+            Height = WindowHeight,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -10000,
+            Top = -10000
+        };
+
+        window.Show();
+        Pump();
+
+        window.NavigateForTest("Statistics");
+        Pump();
+
+        if (window.FindPageForTest("Statistics") is not Statistics page)
+            throw new Exception("Statistics 页面未挂载到内容区");
+
+        if (page.DataContext is not StatisticsViewModel vm)
+            throw new Exception("Statistics 页面的 DataContext 不是 StatisticsViewModel");
+
+        if (vm.Segments.Count == 0)
+            throw new Exception("统计页没有聚合出任何圆环分段（数据是有的）");
+
+        if (vm.TotalExpense != expected.MonthExpense)
+            throw new Exception(
+                $"页面聚合出的本月支出应为 {expected.MonthExpense}，实际 {vm.TotalExpense}");
+
+        Report($"圆环 {vm.Segments.Count} 段, 排行 {vm.RankRows.Count} 行, 趋势 {vm.TrendBars.Count} 根");
+
+        // 布局体检：缺 StaticResource / 模板名字域解析失败时控件会静默塌成 0 尺寸
+        AssertNoCollapse(page, "Statistics");
+
+        // 展开动效必须真的注册到 LAE。这里用 IsRunning 而不是计数：
+        // 测试进程没有渲染循环，LAE 时钟不推进，计数要等 OnComplete 才涨。
+        if (!LAE.LAEngine.IsRunning(Statistics.RevealAnimationName + "_Rank"))
+            throw new Exception("排行条展开没有向 LAE 注册（动效没接上）");
+
+        // 圆环的弧线要能在真实窗口里解析出画刷
+        var paths = new List<System.Windows.Shapes.Path>();
+        CollectVisuals(page, paths);
+
+        if (paths.Count == 0)
+            throw new Exception("统计页里没有画出任何弧线");
+
+        // 侧边栏四个按钮的指示器定位。
+        // 注意：这一次点击会重新走一遍 NavigateTo，而 ViewModel 是按 Transient 注册的，
+        // 页面实例却被 MainWindow 长期缓存 —— 于是缓存页面会拿到**新的** ViewModel。
+        // 因此下面所有针对 ViewModel 的状态断言都必须用这一次点击之后的实例，
+        // 用点击前抓到的那个会永远对不上（命令与状态都已经是另一份了）。
+        window.NavButtonForTest("Statistics").RaiseEvent(
+            new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        Pump();
+
+        if (page.DataContext is not StatisticsViewModel live)
+            throw new Exception("重新导航后 Statistics 页面的 DataContext 不是 StatisticsViewModel");
+
+        SettleIndicator(window);
+        double statsY = window.IndicatorY;
+        Report($"统计项指示器 Y={statsY:0.#}");
+
+        if (Math.Abs(statsY) < 0.5)
+            throw new Exception("统计项的指示器没有离开第一项的位置");
+
+        window.NavButtonForTest("TodayBill").RaiseEvent(
+            new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        Pump();
+
+        SettleIndicator(window);
+
+        if (Math.Abs(window.IndicatorY - statsY) < 1)
+            throw new Exception("四个导航项下指示器定位失准：首项与统计项落在同一位置");
+
+        // 回到统计页取当前这一份实例
+        window.NavigateForTest("Statistics");
+        Pump();
+
+        if (page.DataContext is not StatisticsViewModel current)
+            throw new Exception("回到统计页后 DataContext 不是 StatisticsViewModel");
+
+        Report($"当前实例: 圆环 {current.Segments.Count} 段, 排行 {current.RankRows.Count} 行");
+
+        // 点排行的任意一行应当下钻
+        if (page.FindRankRowForTest() is not { } row)
+            throw new Exception("找不到排行行按钮，下钻入口没接上");
+
+        // 行按钮必须真的绑上了命令：模板里漏掉 Command 时点击毫无反应且不报错
+        if (row.Command is null)
+            throw new Exception("排行行按钮没有绑定命令（下钻点击会静默失效）");
+
+        // 绑定拿到的必须是本页 ViewModel 上那个命令实例。绑到别的 DataContext 上时
+        // 点击照样没反应，而且按钮的 Command 非空，看不出问题。
+        if (!ReferenceEquals(row.Command, current.OpenFocusCommand))
+            throw new Exception(
+                $"排行行按钮绑定的命令不是本页的命令实例: {row.Command.GetType().Name} / {current.OpenFocusCommand.GetType().Name}");
+
+        // 先验证绑定接线：命令实例、命令参数、可执行性。
+        // 这一段替换了"合成一次点击"的写法 —— Button 的 Click 不是 ClickEvent 的类处理器
+        // （它由 OnClick 直接触发），手工 RaiseEvent(ClickEvent) 根本走不到命令，
+        // 那样的断言既测不到东西，又会把失败指向错误的方向。
+        // 从"抬键"到"OnClick"这一段是 WPF 自己的机制，不需要在这里重测。
+        if (row.CommandParameter is not CategoryRankRow boundRow)
+            throw new Exception("排行行按钮的 CommandParameter 不是分类行数据");
+
+        if (!ReferenceEquals(boundRow, current.VisibleRankRows.FirstOrDefault()))
+            throw new Exception("排行行按钮绑定的数据不是列表里的那一行");
+
+        if (!row.Command.CanExecute(row.CommandParameter))
+            throw new Exception("排行行按钮的命令对绑定参数不可执行，点击会是静默失效");
+
+        Report($"行按钮接线: 数据={boundRow.Label}, 参数={boundRow.Label}, 可执行=True");
+
+        // 驱动命令，确认它真的能打开面板（这是点击最终要走的动作）
+        int opensBefore = current.FocusOpenCount;
+        current.OpenFocusCommand.Execute(boundRow);
+        Pump();
+
+        if (current.FocusOpenCount == opensBefore)
+            throw new Exception("执行 OpenFocusCommand 没有触发 OpenFocus");
+
+        if (!current.IsFocusOpen)
+            throw new Exception("点击排行行没有打开下钻面板");
+
+        Report($"下钻已打开: {current.FocusTitle}, {current.FocusSummaryText}");
+
+        current.CloseFocusCommand.Execute(null);
+        Pump();
+
+        if (current.IsFocusOpen)
+            throw new Exception("关闭下钻后面板仍然打开");
+
+        window.Close();
+        Pump();
+
+        DrainSaves();
+        ResetBillsData();
+    }
+
+    // ---- 25. 统计 CSV ----
+
+    /// <summary>
+    /// 导出的 CSV 必须带 UTF-8 BOM。没有 BOM 时 Excel 按本地代码页解释，
+    /// 中文分类与描述全是乱码 —— 这种故障只在 Excel 里才看得见，所以必须在这里挡住。
+    /// </summary>
+    private static void TestStatisticsCsv()
+    {
+        DrainSaves();
+        ResetBillsData();
+
+        // 用**自己新建**的仓库，不用容器里的单例：单例的内存索引会跨测试留着
+        // 前面几项造过的数据（磁盘被清掉也不会退回去），拿它做条数断言会受别的测试影响。
+        var repo = NewRepository();
+        var today = DateOnly.FromDateTime(DateTime.Today);
+
+        var expected = SeedStatisticsData(repo, today);
+
+        var csvFolder = Path.Combine(PaperCoin.Core.Constants.AppDataFolder, "Export");
+        var before = Directory.Exists(csvFolder)
+            ? Directory.GetFiles(csvFolder, "*.csv").ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : [];
+
+        var vm = new StatisticsViewModel(repo);
+        WaitFor(vm.ReloadNowAsync());
+
+        // 导出的是**当前范围**的流水。这里切到"全部"，好让导出条数、造数时算出的
+        // expected.AllEntryCount、以及页面自己统计的笔数三者可比。
+        vm.ShowAllCommand.Execute(null);
+        WaitFor(vm.ReloadNowAsync());
+
+        vm.ExportCsvCommand.Execute(null);
+        Pump();
+
+        if (!vm.HasNotice)
+            throw new Exception("导出后没有任何提示，用户不知道结果");
+
+        Report(vm.Notice);
+
+        var created = Directory.GetFiles(csvFolder, "*.csv")
+            .Where(f => !before.Contains(f))
+            .ToList();
+
+        if (created.Count != 1)
+            throw new Exception($"本次导出应产生 1 个文件，实际 {created.Count}");
+
+        var path = created[0];
+
+        try
+        {
+            var bytes = File.ReadAllBytes(path);
+
+            if (bytes.Length < 3 || bytes[0] != 0xEF || bytes[1] != 0xBB || bytes[2] != 0xBF)
+                throw new Exception("CSV 缺少 UTF-8 BOM，Excel 打开会是乱码");
+
+            var text = File.ReadAllText(path);
+
+            // 按行拆开后先把纯空白行滤掉：明细段与汇总段之间有一行分隔，
+            // 它在 \n 上拆出来只剩一个 \r，RemoveEmptyEntries 不会去掉它。
+            // 用行数做减法容易被这种空行带偏，所以改成**直接数明细行**：
+            // 明细行的首字段是 yyyy-MM-dd，汇总行是"支出合计"这类中文标题。
+            var lines = text
+                .Split('\n')
+                .Select(l => l.TrimEnd('\r').Trim())
+                .Where(l => l.Length > 0)
+                .ToList();
+
+            var detailLines = lines
+                .Where(l => l.Length >= 10 && DateOnly.TryParse(l[..10], out _))
+                .ToList();
+
+            Report($"CSV {bytes.Length} 字节, 非空行 {lines.Count}, 明细 {detailLines.Count} 行, 首行: {lines[0]}");
+
+            if (!lines[0].Contains("日期") || !lines[0].Contains("金额"))
+                throw new Exception($"表头不对: {lines[0]}");
+
+            // 明细条数必须正好等于导出覆盖的范围里的流水条数
+            if (detailLines.Count != expected.AllEntryCount)
+                throw new Exception(
+                    $"CSV 明细行应为 {expected.AllEntryCount}（全部范围的流水条数），实际 {detailLines.Count}。" +
+                    "实际内容: " + string.Join(" / ", detailLines));
+
+            if (detailLines.Count != vm.EntryCount)
+                throw new Exception($"CSV 明细行 {detailLines.Count} 与页面统计的笔数 {vm.EntryCount} 不一致");
+
+            if (!text.Contains("餐饮"))
+                throw new Exception("CSV 里没有分类内容");
+
+            if (!text.Contains("支出合计"))
+                throw new Exception("CSV 里没有汇总段");
+
+            if (!vm.Notice.Contains(path))
+                throw new Exception("导出提示里没有文件路径，用户找不到文件");
+        }
+        finally
+        {
+            // 导出目录是用户可见的产物目录，测试不留垃圾
+            foreach (var file in created) File.Delete(file);
+        }
+
+        DrainSaves();
+        ResetBillsData();
+    }
+
+    /// <summary>
+    /// 造一套跨两个月的统计数据，供统计口径、CSV 与页面三项共用，并**算出**各范围的期望值。
+    /// </summary>
+    /// <remarks>
+    /// 期望值由造数这一端算出来、而不是在各测试里写死：<see cref="SafeDay"/> 会把未来的日期
+    /// 压到今天，本月内的多笔记录可能落到同一天。写死数字在靠月初运行时会对不上，
+    /// 而那种失败看起来像功能坏了，实际只是测试的假设不成立。
+    /// </remarks>
+    private static StatisticsExpectations SeedStatisticsData(BillRepository repo, DateOnly today)
+    {
+        var thisMonth = new DateOnly(today.Year, today.Month, 1);
+        var lastYear = new DateOnly(today.Year - 1, thisMonth.Month, 15);
+
+        var entries = new List<PaperCoin.Core.Models.BillEntry>
+        {
+            // 本月：餐饮两笔 + 交通一笔 + 工资一笔
+            Entry(SafeDay(thisMonth, 2, today), "本月午饭", -100m, "餐饮"),
+            Entry(SafeDay(thisMonth, 5, today), "本月晚饭", -80m, "餐饮"),
+            Entry(SafeDay(thisMonth, 8, today), "本月打车", -40m, "交通"),
+            Entry(SafeDay(thisMonth, 10, today), "本月工资", 5000m, "工资"),
+
+            // 去年同月：餐饮一笔。切到"本年"看不见，只有"全部"或跨年时才进来
+            Entry(lastYear, "去年午饭", -200m, "餐饮")
+        };
+
+        WaitFor(entries.GroupBy(e => e.Date).Select(g => repo.SaveAsync(g.ToList())));
+
+        DrainSaves();
+
+        var inMonth = entries.Where(e => e.Date.Year == today.Year && e.Date.Month == today.Month).ToList();
+        var inYear = entries.Where(e => e.Date.Year == today.Year).ToList();
+
+        return new StatisticsExpectations(
+            MonthExpense: inMonth.Where(e => e.Amount < 0).Sum(e => -e.Amount),
+            MonthIncome: inMonth.Where(e => e.Amount > 0).Sum(e => e.Amount),
+            MonthEntryCount: inMonth.Count,
+            MonthFood: inMonth.Where(e => e.Category == "餐饮").Sum(e => -e.Amount),
+            MonthFoodCount: inMonth.Count(e => e.Category == "餐饮"),
+            YearFood: inYear.Where(e => e.Category == "餐饮").Sum(e => -e.Amount),
+            YearFoodCount: inYear.Count(e => e.Category == "餐饮"),
+            AllEntryCount: entries.Count);
+    }
+
+    /// <summary>造数据的各项期望值，见 <see cref="SeedStatisticsData"/></summary>
+    private sealed record StatisticsExpectations(
+        decimal MonthExpense,
+        decimal MonthIncome,
+        int MonthEntryCount,
+        decimal MonthFood,
+        int MonthFoodCount,
+        decimal YearFood,
+        int YearFoodCount,
+        int AllEntryCount);
+
+    /// <summary>
+    /// 取本月里的第 <paramref name="day"/> 天，超过今天时往前压：统计口径是"到今天就结束"，
+    /// 造一条未来日期的记录会让"本月合计"与预期对不上。
+    /// </summary>
+    private static DateOnly SafeDay(DateOnly monthStart, int day, DateOnly today)
+    {
+        int maxDay = DateTime.DaysInMonth(monthStart.Year, monthStart.Month);
+        var date = new DateOnly(monthStart.Year, monthStart.Month, Math.Min(day, maxDay));
+
+        return date > today ? today : date;
+    }
+
+    private static PaperCoin.Core.Models.BillEntry Entry(
+        DateOnly date, string description, decimal amount, string? category)
+        => new()
+        {
+            Description = description,
+            Amount = amount,
+            Category = category,
+            Date = date
+        };
+
+    private static int Check(string name, Action body)    {
         Console.WriteLine($"[测试] {name}");
         try
         {

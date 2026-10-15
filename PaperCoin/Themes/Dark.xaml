@@ -31,4 +31,21 @@
     <!-- Shadow：暗色主题下阴影更浓，否则在深底上看不出层次 -->
     <SolidColorBrush x:Key="ColorShadow" Color="#000000" Opacity="0.65"/>
     <SolidColorBrush x:Key="ColorWindowShadow" Color="#000000" Opacity="0.55"/>
+
+    <!-- 分类色板：槽位由 Core/CategoryPalette 按分类名求稳定哈希决定，键名不可改。
+         色相在色轮上等距铺开并避开 ColorPositive 的绿（#4FD08A）与 ColorNegative 的红（#F0736A），
+         否则环上会有一段被读成"收入"或"亏损"。暗色底取高亮，与 ColorPositive 同亮度区间。 -->
+    <SolidColorBrush x:Key="CategoryColor01" Color="#5B9BFF"/>
+    <SolidColorBrush x:Key="CategoryColor02" Color="#C08BFF"/>
+    <SolidColorBrush x:Key="CategoryColor03" Color="#FF85A6"/>
+    <SolidColorBrush x:Key="CategoryColor04" Color="#38C9C0"/>
+    <SolidColorBrush x:Key="CategoryColor05" Color="#FFB454"/>
+    <SolidColorBrush x:Key="CategoryColor06" Color="#B5D95C"/>
+    <SolidColorBrush x:Key="CategoryColor07" Color="#9C8CFF"/>
+    <SolidColorBrush x:Key="CategoryColor08" Color="#4FC3E8"/>
+    <SolidColorBrush x:Key="CategoryColor09" Color="#FF9466"/>
+    <SolidColorBrush x:Key="CategoryColor10" Color="#6FD8A8"/>
+
+    <!-- 未分类单独一色，且是有意的中性灰：它不该和任何一个具名分类撞色 -->
+    <SolidColorBrush x:Key="CategoryColorOther" Color="#8C9BB0"/>
 </ResourceDictionary>

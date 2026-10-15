@@ -4,7 +4,7 @@
         xmlns:views="clr-namespace:PaperCoin.Views"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
-        Title="PaperCoin" Height="560" Width="420"
+        Title="PaperCoin" Height="640" Width="480"
         WindowStartupLocation="CenterScreen"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -85,7 +85,8 @@
                             </Border.RenderTransform>
                         </Border>
 
-                        <!-- 导航按钮：位于高亮指示器上层 -->
+                        <!-- 导航按钮：位于高亮指示器上层。
+                             统计项的图标是矢量几何（字体里没有图表字形），见 Icon/AppIcons.xaml。 -->
                         <StackPanel x:Name="NavPanel" Panel.ZIndex="1">
                             <Button x:Name="TodayBillBtn" Content="&#xe682;"
                                     Style="{DynamicResource SideBarbtn}"
@@ -93,6 +94,14 @@
                             <Button x:Name="CalenderBtn" Content="&#xe71e;"
                                     Style="{DynamicResource SideBarbtn}"
                                     Click="CalenderBtn_Click" Tag="CalenderBill" Visibility="Visible"/>
+                            <Button x:Name="StatisticsBtn" Style="{DynamicResource SideBarbtn}"
+                                    Click="StatisticsBtn_Click" Tag="Statistics" Visibility="Visible">
+                                <Path Data="{DynamicResource IconChartGeometry}"
+                                      Stroke="{DynamicResource ColorTextSecondary}"
+                                      StrokeThickness="1.2"
+                                      StrokeLineJoin="Round"
+                                      SnapsToDevicePixels="True"/>
+                            </Button>
                             <Button x:Name="SettingsBtn" Content="&#xe7eb;"
                                     Style="{DynamicResource SideBarbtn}"
                                     Click="SettingsBtn_Click" Tag="Settings" Visibility="Visible"/>

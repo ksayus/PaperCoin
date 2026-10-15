@@ -35,4 +35,20 @@
     <!-- Shadow：亮色主题用低透明度冷灰，纯黑在浅底上偏脏且边缘发硬。 -->
     <SolidColorBrush x:Key="ColorShadow" Color="#7A8CA6" Opacity="0.30"/>
     <SolidColorBrush x:Key="ColorWindowShadow" Color="#7A8CA6" Opacity="0.35"/>
+
+    <!-- 分类色板：键名与槽位含义见 Dark.xaml，两本字典的 key 集合必须完全一致。
+         亮色底用同色相的深版而不是把暗色值调亮：白底上浅色弧段会糊在一起，
+         深版同时保证金额文字与色块有足够对比度。 -->
+    <SolidColorBrush x:Key="CategoryColor01" Color="#2F6FE0"/>
+    <SolidColorBrush x:Key="CategoryColor02" Color="#7B4FD0"/>
+    <SolidColorBrush x:Key="CategoryColor03" Color="#D9457A"/>
+    <SolidColorBrush x:Key="CategoryColor04" Color="#0E8F87"/>
+    <SolidColorBrush x:Key="CategoryColor05" Color="#B8720A"/>
+    <SolidColorBrush x:Key="CategoryColor06" Color="#6E8C1E"/>
+    <SolidColorBrush x:Key="CategoryColor07" Color="#5A4BC4"/>
+    <SolidColorBrush x:Key="CategoryColor08" Color="#1B7FA8"/>
+    <SolidColorBrush x:Key="CategoryColor09" Color="#CC5A2E"/>
+    <SolidColorBrush x:Key="CategoryColor10" Color="#1E8F62"/>
+
+    <SolidColorBrush x:Key="CategoryColorOther" Color="#6B7A90"/>
 </ResourceDictionary>
