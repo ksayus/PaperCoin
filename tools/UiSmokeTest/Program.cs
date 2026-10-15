@@ -171,6 +171,18 @@ internal static class Program
 
                 Shot(window, Path.Combine(directory, $"1-{page}.png"), $"页面 {page}");
                 Report($"  {page}: 指示器 Y={window.IndicatorY:0.#}");
+
+                // 统计页额外截一张"选中某个分类、并滚到分类明细"的：那一块在页面最下面，
+                // 不选中的话截出来只有一句引导语，看不出明细其实没画出来。
+                if (window.FindPageForTest(page) is Statistics stats)
+                {
+                    stats.ScrollToCategoryDetailForTest();
+                    Pump();
+                    SettleCharts(window);
+
+                    Shot(window, Path.Combine(directory, "1-Statistics-分类明细.png"), "分类明细");
+                    Report($"  分类明细: {stats.CategoryDetailSnapshotForTest}");
+                }
             }
 
             // 指示器在四个导航项上的落位，逐个截侧边栏
@@ -1902,6 +1914,24 @@ internal static class Program
         }
     }
 
+    /// <summary>按 x:Name 深度优先查找可视后代</summary>
+    private static T? FindVisualByName<T>(DependencyObject root, string name) where T : FrameworkElement
+    {
+        int count = VisualTreeHelper.GetChildrenCount(root);
+
+        for (int i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+
+            if (child is T match && match.Name == name) return match;
+
+            var nested = FindVisualByName<T>(child, name);
+            if (nested is not null) return nested;
+        }
+
+        return null;
+    }
+
     /// <summary>按类型深度优先收集可视后代，用于断言"某类元素真的画出来了"</summary>
     private static void CollectVisuals<T>(DependencyObject root, List<T> into) where T : DependencyObject
     {
@@ -3540,11 +3570,63 @@ internal static class Program
 
         Report($"分类明细已展开: {current.CategoryDetailTitle}, {current.CategorySummaryText}");
 
+        // 明细在页面最下面。选中后必须自动把它滚进视野 —— 不滚的话用户点完排行
+        // 只觉得"什么都没发生"，内容其实更新了，只是不在屏幕上。
+        Pump();
+        double scrolled = page.ScrollOffsetForTest;
+
+        Report($"选中后自动滚动位置 = {scrolled:0.#}");
+
+        if (scrolled <= 0)
+            throw new Exception("选中分类后页面没有自动滚到分类明细，那块内容在屏幕外，用户看不到");
+
         current.ClearCategoryCommand.Execute(null);
         Pump();
 
         if (current.HasCategorySelection)
             throw new Exception("清除后仍然有选中的分类");
+
+        // 明细必须真的画到界面上，不只是 ViewModel 里有数据。
+        // 绑定写错、可见性没传播、行高为 0 都会造成"数据有、界面空"，而这几种都不报错。
+        current.ShowCategoryCommand.Execute(boundLabel);
+        Pump();
+        page.UpdateLayout();
+
+        if (current.CategoryEntries.Count == 0)
+            throw new Exception("选中分类后明细数据是空的");
+
+        var pageTexts = new List<TextBlock>();
+        CollectVisuals(page, pageTexts);
+
+        var descriptions = current.CategoryEntries
+            .Select(e => e.Description)
+            .Where(d => !string.IsNullOrWhiteSpace(d))
+            .ToList();
+
+        int shown = descriptions.Count(d => pageTexts.Any(t => t.Text == d));
+
+        Report($"分类明细：数据 {descriptions.Count} 条，出现在可视树上的 {shown} 条");
+
+        if (shown == 0)
+            throw new Exception("分类明细一条都没画到界面上（数据有但界面空）");
+
+        // 下拉框里选中的分类名必须是主题前景色，不能是默认黑
+        var picker = FindVisualByName<ComboBox>(page, "CategoryPicker")
+            ?? throw new Exception("找不到分类下拉框 CategoryPicker");
+
+        var pickerTexts = new List<TextBlock>();
+        CollectVisuals(picker, pickerTexts);
+
+        var shownLabel = pickerTexts.FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Text))
+            ?? throw new Exception("下拉框里没有任何文本，选中的分类名没画出来");
+
+        var color = (shownLabel.Foreground as SolidColorBrush)?.Color ?? Colors.Black;
+        Report($"下拉框文本 '{shownLabel.Text}' 颜色 = #{color.R:X2}{color.G:X2}{color.B:X2}");
+
+        // 暗色主题的正文色是 #F0F4FA；接近黑色说明 ContentPresenter 没把前景色传下去
+        if (color.R < 0x40 && color.G < 0x40 && color.B < 0x40)
+            throw new Exception(
+                $"下拉框选中项文本是黑色（#{color.R:X2}{color.G:X2}{color.B:X2}），暗色主题下几乎看不见");
 
         window.Close();
         Pump();

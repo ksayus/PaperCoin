@@ -1,4 +1,4 @@
-<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <!-- 日历：期间导航按钮。用几何字符 ‹ ›，当前字体没有箭头字形。 -->
@@ -316,7 +316,12 @@
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
-                            <ContentPresenter Grid.Column="0" VerticalAlignment="Center"/>
+                            <!-- 前景色必须显式传给 ContentPresenter。
+                                 ComboBox 的 Foreground 不会自动流到模板里生成的 TextBlock 上
+                                 （TextElement.Foreground 不是从 TemplatedParent 继承的），
+                                 不设的话选中项文本用默认黑色，在暗色底上几乎看不见。 -->
+                            <ContentPresenter Grid.Column="0" VerticalAlignment="Center"
+                                              TextElement.Foreground="{DynamicResource ColorTextTitle}"/>
                             <TextBlock Grid.Column="1" Text="⌄" FontSize="12"
                                        Margin="8,-4,0,0" VerticalAlignment="Center"
                                        Foreground="{DynamicResource ColorTextSecondary}"/>
@@ -341,7 +346,8 @@
                 <ControlTemplate TargetType="{x:Type ComboBoxItem}">
                     <Border x:Name="Bd" CornerRadius="4" Padding="{TemplateBinding Padding}"
                             Background="Transparent">
-                        <ContentPresenter/>
+                        <!-- 同上：下拉列表项的文本也要显式给前景色，否则是默认黑 -->
+                        <ContentPresenter TextElement.Foreground="{DynamicResource ColorTextTitle}"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
@@ -367,13 +373,16 @@
                 <ControlTemplate TargetType="{x:Type ComboBox}">
                     <Grid>
                         <!-- IsDropDownOpen 必须双向绑到 ToggleButton.IsChecked 并按
-                             ClickMode=Press 工作, 否则点一下只展开、再点收不起来。 -->
+                             ClickMode=Press 工作, 否则点一下只展开、再点收不起来。
+                             Style 必须显式给：不给就用系统默认的 ToggleButton 模板，
+                             那套模板不跟随主题，选中项文本会画成黑色。 -->
                         <ToggleButton Style="{DynamicResource ComboToggle}"
                                       IsChecked="{Binding IsDropDownOpen,
                                                   RelativeSource={RelativeSource TemplatedParent},
                                                   Mode=TwoWay}">
                             <ContentPresenter Content="{TemplateBinding SelectionBoxItem}"
-                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              TextElement.Foreground="{DynamicResource ColorTextTitle}"/>
                         </ToggleButton>
 
                         <Popup x:Name="PART_Popup"

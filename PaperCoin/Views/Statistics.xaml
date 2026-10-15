@@ -124,7 +124,8 @@
             </Grid>
 
             <!-- 内容高于窗口时滚动。图表与排行都是固定高度，挤在小窗口里会互相压扁。 -->
-            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
+            <ScrollViewer x:Name="DetailScroll" Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled">
                 <StackPanel x:Name="RevealRoot" Margin="0,0,0,4">
 
@@ -365,7 +366,7 @@
                         </StackPanel>
                     </Grid>
 
-                    <Border Style="{DynamicResource SettingRow}">
+                    <Border x:Name="DetailSection" Style="{DynamicResource SettingRow}">
                         <StackPanel>
                             <!-- 没选分类时的引导语 -->
                             <TextBlock Text="点上面的排行行或图例，或从右侧下拉里选一个分类，查看它的全部流水"

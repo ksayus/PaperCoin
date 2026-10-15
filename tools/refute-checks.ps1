@@ -50,6 +50,19 @@ $cases = @(
         From = '            NavItem.Statistics => StatisticsBtn,'
         To   = '            NavItem.Statistics => SettingsBtn,'
         Test = '3.'
+    },    @{
+        Name = '选中分类后不自动滚到明细'
+        File = 'PaperCoin\Views\Statistics.xaml.cs'
+        From = '        if (Vm?.HasCategorySelection != true) return;'
+        To   = '        if (Vm is not null) return;'
+        Test = '24.'
+    },
+    @{
+        Name = '下拉框选中项文本不给前景色'
+        File = 'PaperCoin\Themes\Controls.xaml'
+        From = '                                              TextElement.Foreground="{DynamicResource ColorTextTitle}"/>'
+        To   = '                                              />'
+        Test = '24.'
     }
 )
 
