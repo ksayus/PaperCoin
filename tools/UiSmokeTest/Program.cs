@@ -2774,7 +2774,7 @@ internal static class Program
         using var probe = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(keyPath);
         var original = probe?.GetValue(valueName) as string;
 
-        Report($"HKCU 旧键（1.2.x 遗留，1.3.0 迁移用）: " +
+        Report($"HKCU 旧键（1.2.x 遗留，1.3.0 起迁移用）: " +
                $"{(Microsoft.Win32.Registry.CurrentUser.OpenSubKey(keyPath) is null ? "无" : "有")}");
         Report($"HKLM\\{keyPath}\\{valueName} 当前 = {original ?? "(空)"}");
         Report($"进程是否提权: {elevated}");
