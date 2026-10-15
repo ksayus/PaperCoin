@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using LAE;
+using PaperCoin.Views;
 
 namespace PaperCoin.Controls;
 
@@ -16,7 +17,8 @@ public partial class SwitchToggle : UserControl
     /// <summary>滑块可滑动的像素距离 = 轨宽 42 − 滑块 16 − 左右各 3 的留白</summary>
     private const double KnobTravel = 20;
 
-    private const double SlideMs = 180;
+    /// <summary>切换时滑块先压扁到多宽，再弹回 1.0</summary>
+    private const double KnobSquash = 0.72;
 
     public SwitchToggle()
     {
@@ -115,17 +117,28 @@ public partial class SwitchToggle : UserControl
         {
             // 初次进入不播动画，否则界面打开时所有开关都会滑动一次
             KnobShift.X = targetX;
+            KnobStretch.ScaleX = 1;
+            KnobStretch.ScaleY = 1;
             OnLayer.Opacity = targetOpacity;
             return;
         }
 
-        // 滑块位移带轻微回弹
-        LA.Builder().Ease(Easing.OutBack(1.6))
-            .Move(KnobShift, targetX, 0, SlideMs)
+        // 位移带轻微回弹：越过目标一点再落回，读起来像被拨到位
+        LA.Builder().Ease(Motion.EaseSettle)
+            .Move(KnobShift, targetX, 0, Motion.Playful * 0.6)
             .Play();
 
-        LA.Builder().Ease(Easing.OutCubic)
-            .Opacity(OnLayer, targetOpacity, SlideMs)
+        // 压扁与回弹分两段：终点要精确落回 1.0，单段 overshoot 会停在与超调绑定的值上
+        LA.Builder()
+            .Ease(Motion.EaseBoth)
+            .Scale(KnobStretch, KnobSquash, Motion.Fast)
+            .Then()
+            .Ease(Motion.EaseSettle)
+            .Scale(KnobStretch, 1.0, Motion.Normal)
+            .Play();
+
+        LA.Builder().Ease(Motion.EaseIn)
+            .Opacity(OnLayer, targetOpacity, Motion.Normal)
             .Play();
     }
 }

@@ -17,13 +17,18 @@
         <Border x:Name="OnLayer" CornerRadius="11" Opacity="0"
                 Background="{DynamicResource ColorAddNewBillBtn}"/>
 
-        <!-- 滑块 -->
+        <!-- 滑块。位移走 TranslateTransform，宽度变化走 ScaleTransform：
+             切换瞬间滑块会先横向压扁再回弹，读起来是"被拨过去"的。 -->
         <Border x:Name="Knob" Width="16" Height="16" CornerRadius="8"
                 HorizontalAlignment="Left" VerticalAlignment="Center"
                 Margin="3,0,0,0"
+                RenderTransformOrigin="0.5,0.5"
                 Background="{DynamicResource ColorTextSecondary}">
             <Border.RenderTransform>
-                <TranslateTransform x:Name="KnobShift" X="0"/>
+                <TransformGroup>
+                    <ScaleTransform x:Name="KnobStretch" ScaleX="1" ScaleY="1"/>
+                    <TranslateTransform x:Name="KnobShift" X="0"/>
+                </TransformGroup>
             </Border.RenderTransform>
         </Border>
 

@@ -60,13 +60,21 @@
         </Setter>
     </Style>
 
-    <!-- 日历 / 设置：分段选择（日・月・年、主题三选一）。用 RadioButton + GroupName 保证互斥，ViewModel 不必维护取消其它项的逻辑。 -->
+    <!-- 日历 / 设置：分段选择（日・月・年、主题三选一）。用 RadioButton + GroupName 保证互斥，ViewModel 不必维护取消其它项的逻辑。
+         缩放变换写在控件本身而不是模板里：代码后置按 RenderTransform 取它做按下回弹，
+         模板内的元素拿不到，且模板替换会把变换一起换掉。 -->
     <Style x:Key="ModeRadio" TargetType="{x:Type RadioButton}">
         <Setter Property="GroupName" Value="ModeGroup"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="FontSize" Value="12"/>
         <Setter Property="Margin" Value="0,0,4,0"/>
         <Setter Property="Foreground" Value="{DynamicResource ColorTextSecondary}"/>
+        <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
+        <Setter Property="RenderTransform">
+            <Setter.Value>
+                <ScaleTransform ScaleX="1" ScaleY="1"/>
+            </Setter.Value>
+        </Setter>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="{x:Type RadioButton}">

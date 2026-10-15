@@ -7,6 +7,7 @@
 
     <UserControl.Resources>
         <conv:BoolToVisibilityConverter x:Key="BoolToVis"/>
+        <conv:CategoryBrushConverter x:Key="CategoryBrush"/>
         <conv:HoverSlackConverter x:Key="HoverSlack"/>
     </UserControl.Resources>
 
@@ -49,12 +50,15 @@
             <!-- 粒度切换（日 / 月 / 年） -->
             <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,10,0,10">
                 <RadioButton Content="日" Style="{DynamicResource ModeRadio}"
+                             Click="ModeBtn_Click"
                              IsChecked="{Binding IsDayMode, Mode=OneWay}"
                              Command="{Binding ShowDayCommand}"/>
                 <RadioButton Content="月" Style="{DynamicResource ModeRadio}"
+                             Click="ModeBtn_Click"
                              IsChecked="{Binding IsMonthMode, Mode=OneWay}"
                              Command="{Binding ShowMonthCommand}"/>
                 <RadioButton Content="年" Style="{DynamicResource ModeRadio}"
+                             Click="ModeBtn_Click"
                              IsChecked="{Binding IsYearMode, Mode=OneWay}"
                              Command="{Binding ShowYearCommand}"/>
 
@@ -217,8 +221,10 @@
                                             <TranslateTransform x:Name="EntrySlotShift" X="0" Y="0"/>
                                         </Grid.RenderTransform>
 
-                                        <!-- 悬浮浮动。变换对象必须显式声明：代码后置要对 ScaleTransform 做动画，对 null 取变换会抛异常。 -->
-                                        <Border Padding="10,7" CornerRadius="6"
+                                        <!-- 悬浮浮动。变换对象必须显式声明：代码后置要对 ScaleTransform 做动画，对 null 取变换会抛异常。
+                                             x:Name 是给测试用的身份标记：DataContext 会沿可视树继承，
+                                             模板里新加的任何 Border 都带着同一个 BillEntry，按类型认卡片会数错。 -->
+                                        <Border x:Name="EntryCard" Padding="10,7" CornerRadius="6"
                                                 Background="{DynamicResource ColorCardBackground}"
                                                 BorderBrush="{DynamicResource ColorCardBorder}"
                                                 BorderThickness="1"
@@ -235,12 +241,21 @@
                                                 </Grid.ColumnDefinitions>
 
                                                 <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                                    <TextBlock Text="{Binding Description}"
-                                                               FontSize="12" FontWeight="SemiBold"
-                                                               TextTrimming="CharacterEllipsis"
-                                                               Foreground="{DynamicResource ColorTextTitle}"/>
+                                                    <!-- 分类色条：与今日页的流水卡片同一套颜色，
+                                                         颜色键由 Core/CategoryPalette 按分类名哈希得出。 -->
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <Border Width="3" Height="12" CornerRadius="1.5"
+                                                                Margin="0,0,6,0"
+                                                                VerticalAlignment="Center"
+                                                                Background="{Binding CategoryColorKey,
+                                                                             Converter={StaticResource CategoryBrush}}"/>
+                                                        <TextBlock Text="{Binding Description}"
+                                                                   FontSize="12" FontWeight="SemiBold"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   Foreground="{DynamicResource ColorTextTitle}"/>
+                                                    </StackPanel>
                                                     <TextBlock Text="{Binding Category}" FontSize="10"
-                                                               Margin="0,2,0,0"
+                                                               Margin="9,2,0,0"
                                                                Foreground="{DynamicResource ColorTextSecondary}"/>
                                                 </StackPanel>
 

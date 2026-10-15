@@ -15,9 +15,16 @@ namespace PaperCoin.Views;
 /// </summary>
 public partial class CalenderBill : UserControl
 {
-    private const double SettleMs = 180;
-    private const double HoverMs = 110;
     private const double HoverScale = 1.05;
+
+    /// <summary>内容落定的起点上浮距离</summary>
+    private const double SettleRise = 6;
+
+    /// <summary>粒度按钮按下的回弹峰值</summary>
+    private const double ModePressPeak = 1.12;
+
+    /// <summary>"+ 号"按下的回弹峰值</summary>
+    private const double AddNewBillPeak = 1.18;
 
     /// <summary>
     /// 明细卡片悬浮时的放大倍数。它横向占满列表宽度，放大比例决定左右各溢出多少，
@@ -32,7 +39,6 @@ public partial class CalenderBill : UserControl
     internal const double MaxHoverScale = EntryHoverScale;
 
     // ---- 空状态提示 ----
-    private const double EmptyHintMs = 280;
 
     /// <summary>空状态提示的起始上浮距离，与明细列表入场的位移同一节奏</summary>
     private const double EmptyHintRise = 6;
@@ -180,9 +186,9 @@ public partial class CalenderBill : UserControl
 
             // 位移与淡入放进同一个动画组：同名的组会被后者替换，拆成两次 Play 会互相停掉
             LA.Builder(EmptyHintAnimationName)
-                .Ease(Easing.OutCubic)
-                .Move(EmptyHintShift, 0, 0, EmptyHintMs)
-                .Opacity(EmptyHint, 1, EmptyHintMs)
+                .Ease(Motion.EaseIn)
+                .Move(EmptyHintShift, 0, 0, Motion.Normal)
+                .Opacity(EmptyHint, 1, Motion.Normal)
                 .Play();
 
             EmptyHintPlayCount++;
@@ -202,16 +208,16 @@ public partial class CalenderBill : UserControl
         _settling = true;
 
         // 每次新建变换对象：复用会让上一次动画的收尾值成为下一次的起点，连续翻页时位移越积越小
-        var transform = new TranslateTransform(0, 6);
+        var transform = new TranslateTransform(0, SettleRise);
         SettleTarget.RenderTransform = transform;
         SettleTarget.Opacity = 0;
 
-        LA.Builder().Ease(Easing.OutCubic)
-            .Move(transform, 0, 0, SettleMs)
+        LA.Builder().Ease(Motion.EaseIn)
+            .Move(transform, 0, 0, Motion.Normal)
             .Play();
 
-        LA.Builder().Ease(Easing.OutCubic)
-            .Opacity(SettleTarget, 1, SettleMs)
+        LA.Builder().Ease(Motion.EaseIn)
+            .Opacity(SettleTarget, 1, Motion.Normal)
             .OnComplete(() => _settling = false)
             .Play();
     }
@@ -221,23 +227,23 @@ public partial class CalenderBill : UserControl
     /// <summary>年视图的月份卡片悬浮：轻微抬起</summary>
     private void MonthCard_MouseEnter(object sender, MouseEventArgs e)
     {
-        AnimateScale(sender, HoverScale, HoverMs);
+        AnimateScale(sender, HoverScale, Motion.Fast);
     }
 
     private void MonthCard_MouseLeave(object sender, MouseEventArgs e)
     {
-        AnimateScale(sender, 1.0, HoverMs);
+        AnimateScale(sender, 1.0, Motion.Fast);
     }
 
     /// <summary>明细卡片的悬浮：与月卡片共用同一个缩放原语，幅度更小</summary>
     private void EntryCard_MouseEnter(object sender, MouseEventArgs e)
     {
-        AnimateScale(sender, EntryHoverScale, HoverMs);
+        AnimateScale(sender, EntryHoverScale, Motion.Fast);
     }
 
     private void EntryCard_MouseLeave(object sender, MouseEventArgs e)
     {
-        AnimateScale(sender, 1.0, HoverMs);
+        AnimateScale(sender, 1.0, Motion.Fast);
     }
 
     /// <summary>
@@ -263,7 +269,7 @@ public partial class CalenderBill : UserControl
         if (sender is not FrameworkElement fe) return;
         if (fe.RenderTransform is not ScaleTransform scale) return;
 
-        LA.Builder().Ease(Easing.OutCubic)
+        LA.Builder().Ease(Motion.EaseIn)
             .Scale(scale, target, durationMs)
             .Play();
     }
@@ -300,29 +306,26 @@ public partial class CalenderBill : UserControl
             double peak = 1.06 - index * 0.004;
             if (peak < 1.02) peak = 1.02;
 
-            PlayQElastic(scale, peak, 300);
+            Motion.PlayElastic(scale, peak, Motion.Playful);
             index++;
         }
     }
 
-    /// <summary>
-    /// 放大到峰值再回落到 1.0 的回弹动效。用两段串行动画而不是单段 OutBack：
-    /// OutBack 的回弹终点会停在与超调绑定的目标值上，拆成去程与回程两段才能精确落回静止值。
-    /// </summary>
-    private static void PlayQElastic(ScaleTransform scale, double peak, double durationMs)
-    {
-        LA.Builder()
-            .Ease(Easing.OutCubic)
-            .Scale(scale, peak, durationMs * 0.35)
-            .Then()
-            .Ease(Easing.OutBack(2.0))
-            .Scale(scale, 1.0, durationMs * 0.65)
-            .Play();
-    }
 
     /// <summary>+ 号按下的回弹。面板的开合由 <see cref="BillEditorOverlay"/> 负责。</summary>
     private void AddNewBill_Click(object sender, RoutedEventArgs e)
-        => PlayQElastic(AddNewBillBtnScaleTransform, 1.18, 420);
+        => Motion.PlayElastic(AddNewBillBtnScaleTransform, AddNewBillPeak);
+
+    /// <summary>
+    /// 粒度切换按钮按下的回弹。与其它按钮同一档反馈，让"点到了"这件事在所有控件上一致。
+    /// </summary>
+    private void ModeBtn_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button) return;
+        if (button.RenderTransform is not ScaleTransform scale) return;
+
+        Motion.PlayElastic(scale, ModePressPeak);
+    }
 
     /// <summary>在可视树中深度优先查找第一个指定类型的子元素</summary>
     private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject

@@ -18,18 +18,24 @@ namespace PaperCoin.Views;
 public partial class TodayBill : UserControl
 {
     // ---- 流水卡片 ----
-    private const double RowPressMs = 80;
+
+    /// <summary>按下时压缩到多少。时长为 <see cref="Motion.Fast"/>，直接跟随指针。</summary>
     private const double RowPressScale = 0.97;
+
+    /// <summary>悬浮抬起倍数</summary>
     private const double RowHoverScale = 1.02;
 
-    // ---- 删除回流 ----
-    private const double ReflowMs = 180;
+    /// <summary>抬起回弹的峰值</summary>
+    private const double RowReleasePeak = 1.04;
 
-    // ---- 空状态提示 ----
-    private const double EmptyHintMs = 280;
-
-    /// <summary>空状态提示的起始上浮距离，与列表入场取同一节奏。</summary>
+    /// <summary>空状态提示的起始上浮距离，与列表入场取同一节奏</summary>
     private const double EmptyHintRise = 6;
+
+    /// <summary>合计金额变化时脉冲的峰值</summary>
+    private const double TotalPulsePeak = 1.06;
+
+    /// <summary>+ 号按下时的回弹峰值</summary>
+    private const double AddNewBillPeak = 1.18;
 
     /// <summary>
     /// 空状态提示过渡的注册名。LAE 的分组表全进程共享，加页面前缀避免两个页面互相停掉对方的过渡。
@@ -67,6 +73,17 @@ public partial class TodayBill : UserControl
     /// <summary>删除回流的实际播放次数，同上</summary>
     internal int CardReflowPlayCount { get; private set; }
 
+    /// <summary>
+    /// 合计金额脉冲的播放次数，供 tools/UiSmokeTest 断言"只在数值真的变了才播"。
+    /// </summary>
+    internal int TotalPulsePlayCount { get; private set; }
+
+    /// <summary>上一次展示过的合计金额，用来判断这次刷新是否真的改变了数值</summary>
+    private decimal _lastTotal;
+
+    /// <summary>是否已经有过一次合计，首次载入不播脉冲（那不是"变化"）</summary>
+    private bool _hasTotal;
+
     private TodayBillViewModel? Vm => DataContext as TodayBillViewModel;
 
     public TodayBill()
@@ -87,7 +104,7 @@ public partial class TodayBill : UserControl
         // 推迟到 Render 优先级：此时布局尚未完成，缩放会以错误的 RenderTransformOrigin 起算。
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            PlayQElastic(AddNewBillBtnScaleTransform, 1.18, 420);
+            Motion.PlayElastic(AddNewBillBtnScaleTransform, AddNewBillPeak);
         }), DispatcherPriority.Render);
 
         _cardEntrance.TryPlay();
@@ -98,7 +115,7 @@ public partial class TodayBill : UserControl
 
     /// <summary>+ 号按下的回弹。面板的开合由 <see cref="BillEditorOverlay"/> 负责。</summary>
     private void AddNewBill_Click(object sender, RoutedEventArgs e)
-        => PlayQElastic(AddNewBillBtnScaleTransform, 1.18, 420);
+        => Motion.PlayElastic(AddNewBillBtnScaleTransform, AddNewBillPeak);
 
     /// <summary>
     /// 解除对 ViewModel 的事件订阅。ViewModel 以 Transient 注册而页面被 MainWindow 长期缓存，不退订会一直引用住旧实例。
@@ -144,6 +161,12 @@ public partial class TodayBill : UserControl
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         // 列表空/非空切换：空了播空提示入场，有数据了播卡片入场
+        if (e.PropertyName == nameof(TodayBillViewModel.Total))
+        {
+            PulseTotalIfChanged();
+            return;
+        }
+
         if (e.PropertyName != nameof(TodayBillViewModel.IsEmpty)) return;
 
         if (Vm?.IsEmpty == true)
@@ -206,8 +229,8 @@ public partial class TodayBill : UserControl
             // 先摆回旧位置（本帧渲染之前就位，看不到跳变），再滑到 0
             SlotShiftOf(row).Y = delta;
 
-            LA.Builder().Ease(Easing.OutCubic)
-                .Move(SlotShiftOf(row), 0, 0, ReflowMs)
+            LA.Builder().Ease(Motion.EaseIn)
+                .Move(SlotShiftOf(row), 0, 0, Motion.Normal)
                 .Play();
 
             CardReflowPlayCount++;
@@ -290,9 +313,9 @@ public partial class TodayBill : UserControl
 
             // 位移与淡入放进同一个动画组：同名的组会被后者替换，拆成两次 Play 会互相停掉
             LA.Builder(EmptyHintAnimationName)
-                .Ease(Easing.OutCubic)
-                .Move(EmptyHintShift, 0, 0, EmptyHintMs)
-                .Opacity(EmptyHint, 1, EmptyHintMs)
+                .Ease(Motion.EaseIn)
+                .Move(EmptyHintShift, 0, 0, Motion.Normal)
+                .Opacity(EmptyHint, 1, Motion.Normal)
                 .Play();
 
             EmptyHintPlayCount++;
@@ -301,14 +324,25 @@ public partial class TodayBill : UserControl
 
     // ---- 流水卡片动效 ----
 
+    /// <summary>+ 号悬浮：轻微放大，与流水卡片同一档反馈</summary>
+    private void AddNewBill_MouseEnter(object sender, MouseEventArgs e)
+        => LA.Builder().Ease(Motion.EaseIn)
+            .Scale(AddNewBillBtnScaleTransform, 1.08, Motion.Fast)
+            .Play();
+
+    private void AddNewBill_MouseLeave(object sender, MouseEventArgs e)
+        => LA.Builder().Ease(Motion.EaseIn)
+            .Scale(AddNewBillBtnScaleTransform, 1.0, Motion.Fast)
+            .Play();
+
     /// <summary>指针进入：轻微抬起</summary>
     private void RowCard_MouseEnter(object sender, MouseEventArgs e)
     {
         if (sender is not FrameworkElement fe || fe.RenderTransform is not TransformGroup group) return;
         if (group.Children[0] is not ScaleTransform scale) return;
 
-        LA.Builder().Ease(Easing.OutCubic)
-            .Scale(scale, RowHoverScale, 100)
+        LA.Builder().Ease(Motion.EaseIn)
+            .Scale(scale, RowHoverScale, Motion.Fast)
             .Play();
     }
 
@@ -318,9 +352,9 @@ public partial class TodayBill : UserControl
         if (group.Children[0] is not ScaleTransform scale) return;
         if (group.Children[1] is not TranslateTransform offset) return;
 
-        LA.Builder().Ease(Easing.OutCubic)
-            .Scale(scale, 1.0, 100)
-            .Move(offset, 0, 0, 100)
+        LA.Builder().Ease(Motion.EaseIn)
+            .Scale(scale, 1.0, Motion.Fast)
+            .Move(offset, 0, 0, Motion.Fast)
             .Play();
     }
 
@@ -334,9 +368,9 @@ public partial class TodayBill : UserControl
 
         _rowPressed = true;
 
-        LA.Builder().Ease(Easing.InOutCubic)
-            .Scale(scale, RowPressScale, RowPressMs)
-            .Move(offset, 0, 1, RowPressMs)
+        LA.Builder().Ease(Motion.EaseBoth)
+            .Scale(scale, RowPressScale, Motion.Fast)
+            .Move(offset, 0, 1, Motion.Fast)
             .Play();
     }
 
@@ -352,18 +386,18 @@ public partial class TodayBill : UserControl
         // 落点不在本卡片上（按下后拖了出去）就只还原，不触发编辑
         if (!fe.IsMouseOver)
         {
-            LA.Builder().Ease(Easing.OutCubic)
-                .Scale(scale, 1.0, 100)
-                .Move(offset, 0, 0, 100)
+            LA.Builder().Ease(Motion.EaseIn)
+                .Scale(scale, 1.0, Motion.Fast)
+                .Move(offset, 0, 0, Motion.Fast)
                 .Play();
             return;
         }
 
-        // 抬起时回弹：先冲到 1.04 再落回 1.0
-        PlayQElastic(scale, 1.04, 300);
+        // 抬起时回弹：先冲到峰值再落回 1.0
+        Motion.PlayElastic(scale, RowReleasePeak);
 
-        LA.Builder().Ease(Easing.InOutCubic)
-            .Move(offset, 0, 0, 120)
+        LA.Builder().Ease(Motion.EaseBoth)
+            .Move(offset, 0, 0, Motion.Normal)
             .Play();
 
         // 整个卡片都是编辑热区；删除按钮会在自己的 MouseLeftButtonUp 里把事件标记为已处理，不会走到这里
@@ -384,20 +418,29 @@ public partial class TodayBill : UserControl
         return false;
     }
 
-    // ---- 动效基元 ----
+    // ---- 合计金额脉冲 ----
 
     /// <summary>
-    /// 播一次放大到 <paramref name="peak"/> 再回落到 1.0 的回弹动效。用两段串行动画而不是单段 OutBack：
-    /// OutBack 的回弹终点会停在与超调绑定的目标值上，拆成去程与回程两段才能精确落回静止值。
+    /// 合计金额变化时脉冲一次。
+    /// <para>
+    /// 只在数值**真的变了**的时候播：每次刷新都播的话，进出页面、改一笔别的日期的账
+    /// 都会让这个数字抖一下，那时它传达的不是"金额变了"，噪音很快就让人忽略它。
+    /// </para>
     /// </summary>
-    private static void PlayQElastic(ScaleTransform scale, double peak, double durationMs)
+    private void PulseTotalIfChanged()
     {
-        LA.Builder()
-            .Ease(Easing.InOutCubic)
-            .Scale(scale, peak, durationMs * 0.35)
-            .Then()
-            .Ease(Easing.OutBack(2.0))
-            .Scale(scale, 1.0, durationMs * 0.65)
-            .Play();
+        decimal total = Vm?.Total ?? 0;
+
+        if (_hasTotal && total == _lastTotal) return;
+
+        bool first = !_hasTotal;
+        _hasTotal = true;
+        _lastTotal = total;
+
+        // 首次载入不算"变化"，界面刚从空变成有值，再弹一下是多余的
+        if (first) return;
+
+        Motion.PlayElastic(TotalScale, TotalPulsePeak, Motion.Playful);
+        TotalPulsePlayCount++;
     }
 }

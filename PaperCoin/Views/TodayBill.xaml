@@ -8,6 +8,7 @@
     <!-- 不启用 x:DataType 编译期绑定：删除按钮要用 RelativeSource 取 ItemsControl 的 DataContext，编译期无法解析这类路径。 -->
     <UserControl.Resources>
         <conv:BoolToVisibilityConverter x:Key="BoolToVis"/>
+        <conv:CategoryBrushConverter x:Key="CategoryBrush"/>
         <conv:HoverSlackConverter x:Key="HoverSlack"/>
     </UserControl.Resources>
 
@@ -31,10 +32,15 @@
                         <StackPanel VerticalAlignment="Center">
                             <TextBlock Text="今日合计" FontSize="11"
                                        Foreground="{DynamicResource ColorTextSecondary}"/>
-                            <!-- 正负换色用样式触发器，避免再引入一个金额→Brush 的转换器 -->
+                            <!-- 正负换色用样式触发器，避免再引入一个金额→Brush 的转换器。
+                                 缩放变换供"金额变化时脉冲"用，变换对象必须显式声明：代码后置对 null 取变换会抛异常。 -->
                             <TextBlock x:Name="TotalTextBlock"
                                        Text="{Binding TotalText}"
-                                       FontSize="19" FontWeight="Bold">
+                                       FontSize="19" FontWeight="Bold"
+                                       RenderTransformOrigin="0.5,0.5">
+                                <TextBlock.RenderTransform>
+                                    <ScaleTransform x:Name="TotalScale" ScaleX="1" ScaleY="1"/>
+                                </TextBlock.RenderTransform>
                                 <TextBlock.Style>
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Foreground"
@@ -115,11 +121,21 @@
                                             </Grid.ColumnDefinitions>
 
                                             <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding Description}"
-                                                           FontSize="13" FontWeight="SemiBold"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           Foreground="{DynamicResource ColorTextTitle}"/>
-                                                <StackPanel Orientation="Horizontal" Margin="0,3,0,0">
+                                                <!-- 分类色条：颜色由分类名哈希决定（Core/CategoryPalette），
+                                                     同一分类在任何页面、任何时间都是同一种颜色。
+                                                     是静态元素、不参与动画，与分层阴影同一策略。 -->
+                                                <StackPanel Orientation="Horizontal" Margin="0,0,0,3">
+                                                    <Border Width="3" Height="12" CornerRadius="1.5"
+                                                            Margin="0,0,6,0"
+                                                            VerticalAlignment="Center"
+                                                            Background="{Binding CategoryColorKey,
+                                                                         Converter={StaticResource CategoryBrush}}"/>
+                                                    <TextBlock Text="{Binding Description}"
+                                                               FontSize="13" FontWeight="SemiBold"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               Foreground="{DynamicResource ColorTextTitle}"/>
+                                                </StackPanel>
+                                                <StackPanel Orientation="Horizontal" Margin="9,0,0,0">
                                                     <TextBlock Text="{Binding Category}" FontSize="11"
                                                                Foreground="{DynamicResource ColorTextSecondary}"/>
                                                     <TextBlock Text="{Binding DateText}" FontSize="11"
@@ -196,6 +212,8 @@
                     RenderTransformOrigin="0.5,0.5"
                     HorizontalAlignment="Right"
                     Click="AddNewBill_Click"
+                    MouseEnter="AddNewBill_MouseEnter"
+                    MouseLeave="AddNewBill_MouseLeave"
                     Command="{Binding AddCommand}">
                 <Button.RenderTransform>
                     <TransformGroup>
