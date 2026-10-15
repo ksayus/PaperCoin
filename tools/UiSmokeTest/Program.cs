@@ -31,6 +31,9 @@ internal static class Program
     /// <summary>主内容区宽度 = 窗口 − 侧边栏 50</summary>
     private const double ContentWidth = WindowWidth - 50;
 
+    /// <summary>截图模式：<c>--screenshots &lt;目录&gt;</c>。用来把四个页面与侧边栏指示器渲染成 PNG 肉眼核对 —— 布局塌陷、错位、图标缺失这类问题断言看不出来。</summary>
+    private const string ScreenshotArgument = "--screenshots";
+
     /// <summary>跨进程探针模式的命令行开关，见 <see cref="Main"/></summary>
     private const string ColorProbeArgument = "--color-probe";
 
@@ -56,6 +59,7 @@ internal static class Program
             return 0;
         }
 
+
         var app = new Application
         {
             // 默认 ShutdownMode 会在最后一个窗口关闭时退出进程。侧边栏测试要
@@ -65,6 +69,20 @@ internal static class Program
 
         BootstrapResources(app);
         BootstrapServices();
+
+        // 截图模式：渲染真实窗口存成 PNG 供肉眼核对，不跑断言。
+        var argv = Environment.GetCommandLineArgs();
+        int shotIndex = Array.IndexOf(argv, ScreenshotArgument);
+        if (shotIndex >= 0)
+        {
+            var target = shotIndex + 1 < argv.Length
+                ? argv[shotIndex + 1]
+                : Path.Combine(Path.GetTempPath(), "papercoin-shots");
+
+            ResetBillsData();
+            CaptureScreenshots(target);
+            return 0;
+        }
 
         // 保证每轮从同一状态开始。
         ResetBillsData();
@@ -95,7 +113,7 @@ internal static class Program
             failures += Check("19. 快捷方式图标修正", TestShortcutRepair);
             failures += Check("20. 分类色板：稳定、可解析", TestCategoryPalette);
             failures += Check("21. 仓库按分类汇总支出", TestCategoryExpenseAggregation);
-            failures += Check("22. 统计口径：范围 / 排行 / 趋势 / 下钻 / CSV", TestStatisticsAggregation);
+            failures += Check("22. 统计口径：范围 / 排行 / 趋势 / 分类明细 / CSV", TestStatisticsAggregation);
             failures += Check("23. 圆环几何与占比一致", TestDonutGeometry);
             failures += Check("24. 统计页接入导航并播放展开动效", TestStatisticsPage);
             failures += Check("25. 统计 CSV 带 BOM", TestStatisticsCsv);
@@ -104,6 +122,138 @@ internal static class Program
         Console.WriteLine();
         Console.WriteLine(failures == 0 ? "== 全部通过 ==" : $"== {failures} 项失败 ==");
         return failures;
+    }
+
+    // ---- 截图模式 ----
+
+    /// <summary>
+    /// 把四个页面与侧边栏指示器渲染成 PNG。
+    /// <para>
+    /// 断言能挡住"控件没了"，挡不住"控件在但位置不对、颜色不对、图标画不出来"。
+    /// 这个模式专门补这一段：渲染的是真实窗口、真实主题、真实字体。
+    /// </para>
+    /// </summary>
+    private static void CaptureScreenshots(string directory)
+    {
+        Directory.CreateDirectory(directory);
+
+        // 造一份有多分类、跨月的数据，图表才有东西可画
+        var repo = App.Services.GetRequiredService<BillRepository>();
+        var expected = SeedStatisticsData(repo, DateOnly.FromDateTime(DateTime.Today));
+        Report($"造数完成：本月支出 {expected.MonthExpense}，本年餐饮 {expected.YearFood}");
+
+        var window = new MainWindow
+        {
+            Width = 480,
+            Height = 640,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -10000,
+            Top = -10000
+        };
+
+        window.Show();
+        Pump();
+
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            foreach (var page in new[] { "TodayBill", "CalenderBill", "Statistics", "Settings" })
+            {
+                window.NavigateForTest(page);
+                Pump();
+
+                // 侧边栏指示器走的是布局驱动的落位，等它稳定
+                SettleIndicator(window);
+                Pump();
+
+                // 截图宿主里 LAE 时钟不推进，走动画的话图表会停在起点（环的描边宽度是 0）。
+                // 直接落到展开完成的状态，截出来的才是静态外观。
+                SettleCharts(window);
+
+                Shot(window, Path.Combine(directory, $"1-{page}.png"), $"页面 {page}");
+                Report($"  {page}: 指示器 Y={window.IndicatorY:0.#}");
+            }
+
+            // 指示器在四个导航项上的落位，逐个截侧边栏
+            foreach (var page in new[] { "TodayBill", "CalenderBill", "Statistics", "Settings" })
+            {
+                window.NavButtonForTest(page).RaiseEvent(new RoutedEventArgs(
+                    System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Pump();
+                SettleIndicator(window);
+                Pump();
+
+                Shot(window, Path.Combine(directory, $"2-指示器-{page}.png"), $"指示器 {page}");
+
+                double target = window.IndicatorTargetFor(page);
+                double actual = window.IndicatorY;
+
+                Report($"  指示器 {page}: Y={actual:0.#} 目标={target:0.#} " +
+                       $"偏差={Math.Abs(actual - target):0.#}");
+
+                if (Math.Abs(actual - target) > 1.5)
+                    throw new Exception(
+                        $"指示器没有落在 {page} 项上: Y={actual:0.#}, 应为 {target:0.#}");
+            }
+
+            window.Close();
+        });
+
+        Report($"截图目录: {directory}");
+    }
+
+    /// <summary>
+    /// 让统计页的图表直接落到展开完成的状态。
+    /// 截图宿主没有渲染循环，LAE 的时钟不推进：不这么做，圆环与柱状图都会停在动画起点，
+    /// 截出来的图看不出任何问题，等于白截。
+    /// </summary>
+    private static void SettleCharts(MainWindow window)
+    {
+        if (window.FindPageForTest("Statistics") is not Statistics page) return;
+
+        page.SettleChartsForTest();
+        Pump();
+        Report($"    {page.DonutSnapshot}");
+    }
+
+    /// <summary>
+    /// 把窗口当前内容渲染成 PNG。
+    /// <para>
+    /// 渲染前显式走一遍 <c>Measure</c> + <c>Arrange</c>：只调 <c>UpdateLayout</c> 时，
+    /// 若此刻没有新的布局趟次，RenderSize 会是 0，截出来是一张全透明的空图 ——
+    /// 而且文件照样生成，看上去像"界面本来就是空的"。
+    /// </para>
+    /// </summary>
+    private static void Shot(FrameworkElement element, string path, string label)
+    {
+        int width = (int)Math.Ceiling(element.Width);
+        int height = (int)Math.Ceiling(element.Height);
+
+        if (width <= 0) width = (int)Math.Ceiling(element.ActualWidth);
+        if (height <= 0) height = (int)Math.Ceiling(element.ActualHeight);
+
+        if (width <= 0 || height <= 0)
+        {
+            Report($"  {label}: 尺寸为 0，跳过");
+            return;
+        }
+
+        element.Measure(new Size(width, height));
+        element.Arrange(new Rect(0, 0, width, height));
+        element.UpdateLayout();
+
+        // 直接渲染元素本身，**不要**套一层 VisualBrush：
+        // VisualBrush 只画目标 OnRender 产出的内容，用 AddVisualChild 挂上去的子可视元素
+        // （DonutChart 的弧线就是这种）不会被画进来 —— 截出来的圆环永远是空的。
+        var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(element);
+
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+
+        using var stream = File.Create(path);
+        encoder.Save(stream);
+
+        Report($"  {label}: {width}×{height} -> {Path.GetFileName(path)}");
     }
 
     // ---- 1. 资源 ----
@@ -561,6 +711,37 @@ internal static class Program
             throw new Exception(
                 "指示器在切换后直接瞬移到了终点, 过渡动画被打断: " +
                 $"点击后 {afterNav:0.#}, 起点 {beforeNav:0.#}, 终点 {settled:0.#}");
+
+        // 每一项都要落在**它自己**那个按钮上。
+        // 只断言"指示器动了"是不够的：新增导航项漏进 RepositionIndicator 的 switch 默认分支时，
+        // 点统计项会让指示器停在设置项上，而"动过了"依然成立 —— 这个 bug 真的发生过。
+        foreach (var page in new[] { "TodayBill", "CalenderBill", "Statistics", "Settings" })
+        {
+            window.NavButtonForTest(page).RaiseEvent(new RoutedEventArgs(
+                System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+            Pump();
+            SettleIndicator(window);
+
+            double target = window.IndicatorTargetFor(page);
+            double actual = window.IndicatorY;
+
+            Report($"指示器 {page,-13} Y={actual,7:0.#}  目标={target,7:0.#}  偏差={Math.Abs(actual - target):0.#}");
+
+            if (double.IsNaN(target))
+                throw new Exception($"{page} 的目标位置算不出来（按钮或侧边栏高度为 0）");
+
+            if (Math.Abs(actual - target) > 1.5)
+                throw new Exception(
+                    $"指示器没有落在 {page} 项上: Y={actual:0.#}, 应为 {target:0.#}");
+        }
+
+        // 四项的目标必须互不相同，否则上面的逐项断言会因为"重合"而互相掩盖
+        var targets = new[] { "TodayBill", "CalenderBill", "Statistics", "Settings" }
+            .Select(window.IndicatorTargetFor)
+            .ToList();
+
+        if (targets.Distinct().Count() != targets.Count)
+            throw new Exception($"四个导航项的目标位置有重合: {string.Join(", ", targets.Select(t => t.ToString("0.#")))}");
 
         window.Close();
         Pump();
@@ -3003,33 +3184,56 @@ internal static class Program
 
         Report($"趋势最高: {vm.PeakMonthText}");
 
-        // 下钻：点餐饮应只列出餐饮的支出
-        var focusRow = vm.RankRows.First(r => r.Label == "餐饮");
-        vm.OpenFocusCommand.Execute(focusRow);
+        // 分类明细：选中"餐饮"应列出它**全部时间**的流水，不受当前范围限制
+        Report($"分类清单: {string.Join(", ", vm.Categories)}");
+
+        if (!vm.Categories.Contains("餐饮"))
+            throw new Exception("分类清单里没有 餐饮");
+
+        if (!vm.Categories.Contains("交通"))
+            throw new Exception("分类清单里没有 交通");
+
+        vm.ShowCategoryCommand.Execute("餐饮");
         Pump();
 
-        if (!vm.IsFocusOpen)
-            throw new Exception("下钻后面板没有打开");
+        if (!vm.HasCategorySelection || vm.SelectedCategory != "餐饮")
+            throw new Exception("选中餐饮后 SelectedCategory 不对");
 
-        if (vm.FocusEntries.Count != expected.YearFoodCount)
-            throw new Exception($"本年餐饮应有 {expected.YearFoodCount} 笔，实际 {vm.FocusEntries.Count}");
+        // 本年范围内餐饮 2 笔，但明细是全部时间，应当还有去年那一笔
+        if (vm.CategoryEntries.Count != expected.AllFoodCount)
+            throw new Exception(
+                $"餐饮明细应为全部时间的 {expected.AllFoodCount} 笔（不受范围限制），实际 {vm.CategoryEntries.Count}");
 
-        if (vm.FocusEntries.Any(e => e.Amount >= 0))
-            throw new Exception("下钻明细里混进了收入");
+        if (vm.CategoryEntries.Any(e => PaperCoin.Core.CategoryPalette.Normalize(e.Category) != "餐饮"))
+            throw new Exception("分类明细里混进了别的分类");
 
-        if (vm.FocusEntries.Any(e => PaperCoin.Core.CategoryPalette.Normalize(e.Category) != "餐饮"))
-            throw new Exception("下钻明细里混进了别的分类");
+        // 列表按日期倒序，最近的在前
+        for (int i = 1; i < vm.CategoryEntries.Count; i++)
+        {
+            if (vm.CategoryEntries[i - 1].Date < vm.CategoryEntries[i].Date)
+                throw new Exception($"分类明细没有按日期倒序: 第 {i} 行比前一行新");
+        }
 
-        Report($"下钻 {vm.FocusTitle}: {vm.FocusSummaryText}");
+        Report($"分类明细 {vm.CategoryDetailTitle}: {vm.CategorySummaryText}");
 
-        vm.CloseFocusCommand.Execute(null);
-        if (vm.IsFocusOpen)
-            throw new Exception("关闭下钻后面板仍然打开");
+        if (!vm.CategorySummaryText.Contains($"{expected.AllFoodCount} 笔"))
+            throw new Exception($"分类汇总文案里没有笔数: {vm.CategorySummaryText}");
 
-        // 切换范围时下钻若已失效必须自动关闭，否则面板会停在"该分类在此范围内没有记录"
-        vm.OpenFocusCommand.Execute(focusRow);
+        // 换时间范围不应把选中的分类踢掉 —— 明细本来就不受范围限制
         vm.ShowMonthCommand.Execute(null);
         WaitFor(vm.ReloadNowAsync());
+
+        if (vm.SelectedCategory != "餐饮")
+            throw new Exception("切换时间范围后分类明细的选中项被清掉了");
+
+        if (vm.CategoryEntries.Count != expected.AllFoodCount)
+            throw new Exception(
+                $"切换范围后餐饮明细变了: {vm.CategoryEntries.Count}，应当仍是全部时间的 {expected.AllFoodCount} 笔");
+
+        vm.ClearCategoryCommand.Execute(null);
+
+        if (vm.HasCategorySelection)
+            throw new Exception("清除后仍有选中的分类");
 
         DrainSaves();
         ResetBillsData();
@@ -3114,6 +3318,85 @@ internal static class Program
 
         if (!LAE.LAEngine.IsRunning("StatisticsDonut"))
             throw new Exception("圆环展开没有向 LAE 注册（动效没接上）");
+
+        // 几何算对不代表画得出来：描边宽度为 0、画刷透明、笔宽为 0 都会让它"存在但看不见"。
+        // 这里直接渲染出来数像素 —— 沿圆心那条横带扫一遍，数明显偏离背景色的像素。
+        chart.SnapToRevealed();
+        Pump();
+        chart.UpdateLayout();
+
+        int colored = 0;
+        for (int y = 60; y < 90; y++)
+        {
+            for (int x = 0; x < 150; x++)
+            {
+                var pixel = PixelAt(chart, 150, 150, x, y);
+                if (pixel.R < 200 || pixel.G < 200 || pixel.B < 200) colored++;
+            }
+        }
+
+        Report($"圆心横带上的非背景像素 = {colored}");
+
+        if (colored < 40)
+            throw new Exception($"圆环渲染出来是空的（只有 {colored} 个非背景像素），弧线没画到界面上");
+
+        // 用一个**真实窗口里**的宿主来取色：DonutChart 的弧线是用 AddVisualChild 挂上去的，
+        // 控件必须挂在活的渲染树上才会被画出来 —— 游离的 Grid（不 Show）渲染出来永远是空的，
+        // 那会得出"环没画出来"的错误结论。
+        var proofHost = new Grid { Width = 200, Height = 200, Background = Brushes.White };
+        proofHost.Children.Add(new PaperCoin.Controls.DonutChart
+        {
+            Width = 200,
+            Height = 200,
+            RingThickness = 26,
+            AnimationFrozen = true,
+            ItemsSource = segments
+        });
+
+        var proofWindow = new Window
+        {
+            Width = 200,
+            Height = 200,
+            WindowStyle = WindowStyle.None,
+            ShowInTaskbar = false,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -10000,
+            Top = -10000,
+            Content = proofHost
+        };
+
+        proofWindow.Show();
+        Pump();
+        proofHost.UpdateLayout();
+
+        // 半径 87、笔宽 26：环体在半径 74~100 之间，到圆心 74 之内是空的。
+        // 取 12 点方向（环上）与正中（洞里）两点，断言前者有色、后者是底色。
+        var onRing = PixelAt(proofHost, 200, 200, 100, 15);
+        var inHole = PixelAt(proofHost, 200, 200, 100, 100);
+
+        Report($"环上像素(100,15) = #{onRing.R:X2}{onRing.G:X2}{onRing.B:X2}");
+        Report($"洞中像素(100,100) = #{inHole.R:X2}{inHole.G:X2}{inHole.B:X2}");
+
+        // 弧线是自绘控件自己挂上去的可视子元素。挂上去不等于画得出来：
+        // 没有被 Arrange 过的子元素 RenderSize 是 0，渲染时会被直接跳过。
+        var ringPaths = new List<System.Windows.Shapes.Path>();
+        CollectVisuals(proofHost, ringPaths);
+
+        foreach (var p in ringPaths)
+        {
+            var bounds = p.Data?.Bounds ?? Rect.Empty;
+            Report($"  弧线 RenderSize={p.RenderSize.Width:0.#}×{p.RenderSize.Height:0.#} " +
+                   $"几何Bounds={bounds.Width:0.#}×{bounds.Height:0.#} 笔宽={p.StrokeThickness:0.#}");
+        }
+
+        proofWindow.Close();
+        Pump();
+
+        if (onRing.R > 240 && onRing.G > 240 && onRing.B > 240)
+            throw new Exception("12 点方向应当落在环体上，取到的却是白底 —— 环没有画出来");
+
+        if (inHole.R < 240 || inHole.G < 240 || inHole.B < 240)
+            throw new Exception($"圆心应当是空的，取到的却是 #{inHole.R:X2}{inHole.G:X2}{inHole.B:X2} —— 画成了实心饼");
 
         window.Close();
         Pump();
@@ -3225,44 +3508,43 @@ internal static class Program
 
         // 绑定拿到的必须是本页 ViewModel 上那个命令实例。绑到别的 DataContext 上时
         // 点击照样没反应，而且按钮的 Command 非空，看不出问题。
-        if (!ReferenceEquals(row.Command, current.OpenFocusCommand))
+        if (!ReferenceEquals(row.Command, current.ShowCategoryCommand))
             throw new Exception(
-                $"排行行按钮绑定的命令不是本页的命令实例: {row.Command.GetType().Name} / {current.OpenFocusCommand.GetType().Name}");
+                $"排行行按钮绑定的命令不是本页的命令实例: {row.Command.GetType().Name} / {current.ShowCategoryCommand.GetType().Name}");
 
         // 先验证绑定接线：命令实例、命令参数、可执行性。
         // 这一段替换了"合成一次点击"的写法 —— Button 的 Click 不是 ClickEvent 的类处理器
         // （它由 OnClick 直接触发），手工 RaiseEvent(ClickEvent) 根本走不到命令，
         // 那样的断言既测不到东西，又会把失败指向错误的方向。
         // 从"抬键"到"OnClick"这一段是 WPF 自己的机制，不需要在这里重测。
-        if (row.CommandParameter is not CategoryRankRow boundRow)
-            throw new Exception("排行行按钮的 CommandParameter 不是分类行数据");
+        if (row.CommandParameter is not string boundLabel)
+            throw new Exception("排行行按钮的 CommandParameter 不是分类名");
 
-        if (!ReferenceEquals(boundRow, current.VisibleRankRows.FirstOrDefault()))
-            throw new Exception("排行行按钮绑定的数据不是列表里的那一行");
+        var boundRow = current.VisibleRankRows.FirstOrDefault(r => r.Label == boundLabel)
+            ?? throw new Exception($"排行行按钮绑定的分类 {boundLabel} 不在当前列表里");
 
-        if (!row.Command.CanExecute(row.CommandParameter))
+        if (!row.Command.CanExecute(boundLabel))
             throw new Exception("排行行按钮的命令对绑定参数不可执行，点击会是静默失效");
 
-        Report($"行按钮接线: 数据={boundRow.Label}, 参数={boundRow.Label}, 可执行=True");
+        Report($"行按钮接线: 数据={boundRow.Label}, 参数={boundLabel}, 可执行=True");
 
-        // 驱动命令，确认它真的能打开面板（这是点击最终要走的动作）
-        int opensBefore = current.FocusOpenCount;
-        current.OpenFocusCommand.Execute(boundRow);
+        // 驱动命令，确认它真的能选中分类（这是点击最终要走的动作）
+        current.ShowCategoryCommand.Execute(boundLabel);
         Pump();
 
-        if (current.FocusOpenCount == opensBefore)
-            throw new Exception("执行 OpenFocusCommand 没有触发 OpenFocus");
+        if (current.SelectedCategory != boundLabel)
+            throw new Exception("执行 ShowCategoryCommand 没有选中分类");
 
-        if (!current.IsFocusOpen)
-            throw new Exception("点击排行行没有打开下钻面板");
+        if (current.CategoryEntries.Count == 0)
+            throw new Exception("选中分类后明细列表是空的（该分类明明有流水）");
 
-        Report($"下钻已打开: {current.FocusTitle}, {current.FocusSummaryText}");
+        Report($"分类明细已展开: {current.CategoryDetailTitle}, {current.CategorySummaryText}");
 
-        current.CloseFocusCommand.Execute(null);
+        current.ClearCategoryCommand.Execute(null);
         Pump();
 
-        if (current.IsFocusOpen)
-            throw new Exception("关闭下钻后面板仍然打开");
+        if (current.HasCategorySelection)
+            throw new Exception("清除后仍然有选中的分类");
 
         window.Close();
         Pump();
@@ -3415,6 +3697,7 @@ internal static class Program
             MonthFoodCount: inMonth.Count(e => e.Category == "餐饮"),
             YearFood: inYear.Where(e => e.Category == "餐饮").Sum(e => -e.Amount),
             YearFoodCount: inYear.Count(e => e.Category == "餐饮"),
+            AllFoodCount: entries.Count(e => e.Category == "餐饮"),
             AllEntryCount: entries.Count);
     }
 
@@ -3427,6 +3710,7 @@ internal static class Program
         int MonthFoodCount,
         decimal YearFood,
         int YearFoodCount,
+        int AllFoodCount,
         int AllEntryCount);
 
     /// <summary>

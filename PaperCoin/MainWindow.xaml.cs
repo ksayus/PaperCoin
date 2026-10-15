@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -34,6 +34,7 @@ public partial class MainWindow : Window
     /// 用该值区分布局复算与真正换了导航项，避免打断正在播放的过渡。初值 NaN，首帧必定走播放分支。
     /// </summary>
     private double _indicatorTarget = double.NaN;
+
 
     /// <summary>当前高亮的导航项，窗口尺寸变化时用它把指示器重新对准。</summary>
     private NavItem _activeNav = NavItem.TodayBill;
@@ -160,11 +161,15 @@ public partial class MainWindow : Window
 
     private void RepositionIndicator(bool animate)
     {
+        // 四个导航项都要显式列出。用 switch 的默认分支兜底时，新增的枚举值会静默落到
+        // 最后一个按钮上 —— 点击统计项，指示器却停在设置项，而且没有任何报错。
         var button = _activeNav switch
         {
             NavItem.TodayBill => TodayBillBtn,
             NavItem.CalenderBill => CalenderBtn,
-            _ => SettingsBtn
+            NavItem.Statistics => StatisticsBtn,
+            NavItem.Settings => SettingsBtn,
+            _ => TodayBillBtn
         };
 
         MoveIndicatorTo(button, animate);
@@ -177,6 +182,30 @@ public partial class MainWindow : Window
 
     /// <summary>侧边栏按钮容器的高度，供测试确认缩放改变了布局。</summary>
     internal double NavPanelHeight => NavPanel.ActualHeight;
+
+    /// <summary>
+    /// 某个导航项落定后指示器应当停在的偏移量。
+    /// <para>
+    /// 测试用它做**位置**断言：只断言"指示器动了"是不够的 —— 新增枚举值漏进 switch 的
+    /// 默认分支时，点统计项会让指示器停在设置项上，而"动过了"依然成立。
+    /// </para>
+    /// </summary>
+    internal double IndicatorTargetFor(string pageName) => IndicatorTargetFor(NavButtonForTest(pageName));
+
+    private double IndicatorTargetFor(Button button)
+    {
+        double navHeight = NavPanel.ActualHeight;
+        double buttonHeight = button.ActualHeight;
+        if (navHeight <= 0 || buttonHeight <= 0) return double.NaN;
+
+        double center = button.TranslatePoint(new Point(0, buttonHeight / 2), NavPanel).Y;
+
+        double indicatorHeight = SideBarActiveShape.ActualHeight > 0
+            ? SideBarActiveShape.ActualHeight
+            : SideBarActiveShape.Height;
+
+        return center - navHeight + indicatorHeight / 2 + 4;
+    }
 
     /// <summary>按名导航，供测试驱动侧边栏切换。</summary>
     internal void NavigateForTest(string pageName)
@@ -239,7 +268,7 @@ public partial class MainWindow : Window
             : SideBarActiveShape.Height;
 
         double target = buttonCenter - navHeight + indicatorHeight / 2 + 4;
-        
+
         ApplyIndicatorOffset(target, animate);
     }
 

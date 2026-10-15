@@ -1,4 +1,5 @@
-﻿using System.Globalization;
+﻿using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Windows.Input;
@@ -121,11 +122,11 @@ public partial class StatisticsViewModel : ObservableObject
         ShowYearCommand = new RelayCommand(() => SetRange(StatisticsRange.Year));
         ShowAllCommand = new RelayCommand(() => SetRange(StatisticsRange.All));
         RefreshCommand = new RelayCommand(() => _ = ReloadAsync());
+        ExportCsvCommand = new RelayCommand(ExportCsv);
+        ShowCategoryCommand = new RelayCommand<string>(ShowCategory);
+        ClearCategoryCommand = new RelayCommand(() => SelectedCategory = null);
         ShowAllCategoriesCommand = new RelayCommand(() => IsRankExpanded = true);
         ShowTopCategoriesCommand = new RelayCommand(() => IsRankExpanded = false);
-        ExportCsvCommand = new RelayCommand(ExportCsv);
-        OpenFocusCommand = new RelayCommand<CategoryRankRow>(OpenFocus);
-        CloseFocusCommand = new RelayCommand(CloseFocus);
     }
 
     // ---- 命令 ----
@@ -137,8 +138,12 @@ public partial class StatisticsViewModel : ObservableObject
     public ICommand ShowAllCategoriesCommand { get; }
     public ICommand ShowTopCategoriesCommand { get; }
     public ICommand ExportCsvCommand { get; }
-    public ICommand OpenFocusCommand { get; }
-    public ICommand CloseFocusCommand { get; }
+
+    /// <summary>选中某个分类查看它的完整明细</summary>
+    public ICommand ShowCategoryCommand { get; }
+
+    /// <summary>清空分类明细的选择</summary>
+    public ICommand ClearCategoryCommand { get; }
 
     // ---- 范围 ----
 
@@ -175,7 +180,6 @@ public partial class StatisticsViewModel : ObservableObject
 
         Range = range;
         IsRankExpanded = false;
-        CloseFocus();
 
         _ = ReloadNowAsync();
     }
@@ -222,6 +226,47 @@ public partial class StatisticsViewModel : ObservableObject
     /// <summary>趋势里最高的那个月，用于在界面上标一句"最高"</summary>
     public string PeakMonthText { get; private set; } = "";
 
+    // ---- 单个分类的明细 ----
+
+    /// <summary>
+    /// 分类明细当前选中的分类，null 表示还没选。
+    /// <para>
+    /// 与 <see cref="Focus"/>（图表下钻）是两件事：下钻看的是"这个分类在**当前范围**里花在哪"，
+    /// 分类明细看的是"这个分类**一共有多少笔**"。前者跟着范围走，后者刻意不受范围限制 ——
+    /// 想核对某个分类的完整流水时，按范围过滤反而碍事。
+    /// </para>
+    /// </summary>
+    private string? _selectedCategory;
+
+    public string? SelectedCategory
+    {
+        get => _selectedCategory;
+        private set
+        {
+            if (!SetProperty(ref _selectedCategory, value)) return;
+
+            OnPropertyChanged(nameof(HasCategorySelection));
+            OnPropertyChanged(nameof(CategoryDetailTitle));
+
+            LoadCategoryEntries();
+        }
+    }
+
+    public bool HasCategorySelection => !string.IsNullOrEmpty(SelectedCategory);
+
+    /// <summary>可选的分类清单，按用量降序 —— 与排行的顺序一致</summary>
+    public ObservableCollection<string> Categories { get; } = [];
+
+    /// <summary>选中分类的全部流水（不受时间范围限制），按日期倒序，最近的在前</summary>
+    public ObservableCollection<BillEntry> CategoryEntries { get; } = [];
+
+    public string CategoryDetailTitle => string.IsNullOrEmpty(SelectedCategory)
+        ? "分类明细"
+        : SelectedCategory;
+
+    /// <summary>选中分类的汇总文案：笔数、合计、占全部支出的比例</summary>
+    public string CategorySummaryText { get; private set; } = "";
+
     // ---- 汇总 ----
 
     public decimal TotalExpense { get; private set; }
@@ -249,70 +294,16 @@ public partial class StatisticsViewModel : ObservableObject
     /// <summary>范围内有支出。图例与排行只在有支出时才显示，否则空环加空列表是两处噪音。</summary>
     public bool HasExpense => TotalExpense > 0;
 
-    // ---- 下钻 ----
-
-    private CategoryRankRow? _focus;
-
-    /// <summary>当前下钻查看的分类，null 表示没有下钻</summary>
-    public CategoryRankRow? Focus
+    /// <summary>
+    /// 选中一个分类并展示它的完整明细。
+    /// 点排行行、点图例、从下拉里选，三个入口走的是同一个方法，看到的是同一份东西。
+    /// </summary>
+    private void ShowCategory(string? category)
     {
-        get => _focus;
-        private set
-        {
-            if (!SetProperty(ref _focus, value)) return;
+        if (string.IsNullOrWhiteSpace(category)) return;
 
-            OnPropertyChanged(nameof(IsFocusOpen));
-            OnPropertyChanged(nameof(FocusTitle));
-        }
+        SelectedCategory = category;
     }
-
-    public bool IsFocusOpen => Focus is not null;
-
-    public string FocusTitle => Focus is null ? "" : $"{Focus.Label} · {Focus.AmountText}";
-
-    private readonly List<BillEntry> _focusEntries = [];
-
-    /// <summary>下钻分类在当前范围内的流水，按日期升序</summary>
-    public IReadOnlyList<BillEntry> FocusEntries => _focusEntries;
-
-    public string FocusSummaryText => Focus is null
-        ? ""
-        : $"共 {_focusEntries.Count} 笔 · {Focus.ShareText}";
-
-    /// <summary>下钻面板打开过的次数，供 tools/UiSmokeTest 区分"点击没送到"与"状态被重置"</summary>
-    internal int FocusOpenCount { get; private set; }
-
-
-
-    private void OpenFocus(CategoryRankRow? row)
-    {
-        if (row is null) return;
-
-        FocusOpenCount++;
-        _focusEntries.Clear();
-
-        // 下钻只在已经载入的范围内筛，不重新读盘：范围与分类都已经确定，
-        // 数据在 _rangeEntries 里全部就绪。
-        _focusEntries.AddRange(_rangeEntries
-            .Where(e => e.Amount < 0)
-            .Where(e => string.Equals(
-                CategoryPalette.Normalize(e.Category), row.Label, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(e => e.Date));
-
-        // 先记下"原来就是这一行"，再赋值：SetProperty 按引用比较，
-        // 关掉再点同一行时新旧引用相同，不会发通知，面板会因为 IsFocusOpen
-        // 没被重新通知而打不开。这几条通知因此必须显式发。
-        bool alreadyOpen = Focus is not null;
-
-        Focus = row;
-
-        if (alreadyOpen) OnPropertyChanged(nameof(IsFocusOpen));
-
-        OnPropertyChanged(nameof(FocusEntries));
-        OnPropertyChanged(nameof(FocusSummaryText));
-    }
-
-    private void CloseFocus() => Focus = null;
 
     // ---- 提示 ----
 
@@ -335,6 +326,9 @@ public partial class StatisticsViewModel : ObservableObject
 
     /// <summary>当前范围里的全部流水，下钻与汇总共用这一份</summary>
     private List<BillEntry> _rangeEntries = [];
+
+    /// <summary>全部流水，不受范围限制。分类清单与分类明细用它：明细刻意不跟着范围走。</summary>
+    private List<BillEntry> _allEntries = [];
 
     /// <summary>
     /// 按需刷新。统计页实例被 MainWindow 长期缓存，每次切回页面都会调到这里；
@@ -359,28 +353,89 @@ public partial class StatisticsViewModel : ObservableObject
         // 全部范围的起止不可能比"数据库里最早的一天"更早，用 DateOnly 的最小值兜住
         var (from, to) = RangeBounds();
 
-        var rangeEntries = await _repository.LoadAllAsync();
+        var all = await _repository.LoadAllAsync();
 
-        _rangeEntries = [.. rangeEntries.Where(e => e.Date >= from && e.Date <= to)];
+        _allEntries = [.. all];
+        _rangeEntries = [.. all.Where(e => e.Date >= from && e.Date <= to)];
 
         var breakdown = await _repository.GetCategoryExpenseAsync(from, to);
 
         BuildSegments(breakdown);
         BuildRanks(breakdown);
         BuildSummary();
-        BuildTrend(rangeEntries);
+        BuildTrend(all);
+        BuildCategories();
 
-        // 下钻的分类若已不在新范围里，直接关掉，避免面板停在"该分类在此范围内没有记录"
-        if (Focus is not null)
-        {
-            var again = breakdown.FirstOrDefault(
-                t => string.Equals(t.Category, Focus.Label, StringComparison.OrdinalIgnoreCase));
-
-            if (again is null) CloseFocus();
-            else OpenFocus(RankRows.FirstOrDefault(r => r.Label == again.Category));
-        }
+        // 选中分类的存续由 BuildCategories 负责：它按全量流水判断，
+        // 换时间范围不会把选中项踢掉 —— 分类明细本来就不受范围限制。
 
         _loadedRevision = _repository.Revision;
+    }
+
+    /// <summary>
+    /// 重建分类清单。**取自全量流水**而不是当前范围：分类明细刻意不受范围限制，
+    /// 清单跟着范围变的话，切一次"本月"就会让上个月才用过的分类从下拉里消失。
+    /// </summary>
+    private void BuildCategories()
+    {
+        var wanted = _allEntries
+            .Where(e => e.Amount < 0)
+            .Select(e => CategoryPalette.Normalize(e.Category))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // 顺序对齐排行（金额降序），把没有金额可言的空分类放最后
+        var order = _allEntries
+            .Where(e => e.Amount < 0)
+            .GroupBy(e => CategoryPalette.Normalize(e.Category), StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(g => g.Sum(e => -e.Amount))
+            .Select(g => g.Key)
+            .ToList();
+
+        Categories.Clear();
+        foreach (var name in order.Where(wanted.Contains))
+            Categories.Add(name);
+
+        // 选中的分类若还在，保持选中；不在就清掉，避免明细面板停在一个已经没有记录的分类上
+        if (SelectedCategory is not null && !Categories.Contains(SelectedCategory, StringComparer.OrdinalIgnoreCase))
+            SelectedCategory = null;
+        else
+            LoadCategoryEntries();
+    }
+
+    /// <summary>重算选中分类的明细列表与汇总文案</summary>
+    private void LoadCategoryEntries()
+    {
+        CategoryEntries.Clear();
+
+        if (string.IsNullOrEmpty(SelectedCategory))
+        {
+            CategorySummaryText = "";
+            OnPropertyChanged(nameof(CategorySummaryText));
+            return;
+        }
+
+        var matching = _allEntries
+            .Where(e => string.Equals(
+                CategoryPalette.Normalize(e.Category), SelectedCategory, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(e => e.Date)
+            .ToList();
+
+        foreach (var entry in matching)
+            CategoryEntries.Add(entry);
+
+        decimal spent = matching.Where(e => e.Amount < 0).Sum(e => -e.Amount);
+        decimal earned = matching.Where(e => e.Amount > 0).Sum(e => e.Amount);
+
+        // 占比的分母是**全部时间**的支出：明细列表本身不受范围限制，分母跟着范围走会前后矛盾
+        decimal allExpense = _allEntries.Where(e => e.Amount < 0).Sum(e => -e.Amount);
+        string share = allExpense == 0 ? "" : $" · 占 {spent / allExpense:P1}";
+
+        CategorySummaryText = earned > 0
+            ? $"共 {matching.Count} 笔 · 支出 {spent:N2} · 收入 {earned:N2}{share}"
+            : $"共 {matching.Count} 笔 · 合计 {spent:N2}{share}";
+
+        OnPropertyChanged(nameof(CategorySummaryText));
     }
 
     /// <summary>当前范围的首尾两天，都含在内。</summary>

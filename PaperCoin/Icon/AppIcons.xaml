@@ -8,27 +8,30 @@
          光看 U+E649 这种编号无法反查它长什么样，所以码位与语义的对应关系集中写在这里。
          换图标时只改这个文件，各 View 都通过 DynamicResource 引用。 -->
 
-    <!-- 已核对的字形清单，Iconfont.ttf 里全部 19 个码位。
+    <!-- 已核对的字形清单，Iconfont.ttf 里全部 22 个码位。
 
          核对方式：用 GDI+ 的 PrivateFontCollection 按文件路径加载这个 TTF，逐个码位画出来看。
          不要用 WPF 的 pack 资源字体去画，无窗口的测试宿主里解析不出来，所有图标会画成缺字方框。
 
            U+E600 文件夹(实心)     U+E682 列表/账单(圆角框+两横)
-           U+E60C 电源             U+E71E 日历
-           U+E60E ›(右尖括号)      U+E7EB 齿轮(六边形底)
-           U+E62A ✕(叉)            U+EAEC 调色盘
-           U+E645 方框+铅笔        U+EAF3 ＋(加号)
-           U+E649 圆圈 i           U+EB2F 时钟
-           U+E64E ‹(左尖括号)      U+ED1B ▮▮(暂停)
-           U+E650 ─(最小化)        U+E651 □(最大化)
+           U+E60C 电源             U+E6B0 刷新(带¥)
+           U+E60E ›(右尖括号)      U+E6C3 统计/分析(折线+柱)
+           U+E62A ✕(叉)            U+E710 拼图
+           U+E634 房子             U+E71E 日历
+           U+E645 方框+铅笔        U+E7EB 齿轮(六边形底)
+           U+E649 圆圈 i           U+EAEC 调色盘
+           U+E64E ‹(左尖括号)      U+EAF3 ＋(加号)
+           U+E650 ─(最小化)        U+EB2F 时钟
+           U+E651 □(最大化)        U+ED1B ▮▮(暂停)
            U+E653 叠框(还原)       U+E678 云
 
-         两个结论：U+ED1B 是“暂停”而不是垃圾桶；这套字体里没有垃圾桶，也没有刷新箭头和下载箭头，
+         两个结论：U+ED1B 是“暂停”而不是垃圾桶；这套字体里没有垃圾桶，
          垃圾桶改用下面的 IconDeleteGeometry 矢量几何。 -->
 
     <!-- 侧边栏 / 标题栏 -->
     <sys:String x:Key="IconTodayBill">&#xe682;</sys:String>
     <sys:String x:Key="IconCalendar">&#xe71e;</sys:String>
+    <sys:String x:Key="IconStatistics">&#xe6c3;</sys:String>
     <sys:String x:Key="IconSettings">&#xe7eb;</sys:String>
     <sys:String x:Key="IconAdd">&#xeaf3;</sys:String>
     <sys:String x:Key="IconClose">&#xe62a;</sys:String>
@@ -56,27 +59,22 @@
     <!-- 文件夹 / 数据目录 -->
     <sys:String x:Key="IconFolder">&#xe600;</sys:String>
 
+    <!-- 首页 / 房子 -->
+    <sys:String x:Key="IconHome">&#xe634;</sys:String>
+
     <!-- 开机自动启动 / 电源 -->
     <sys:String x:Key="IconPower">&#xe60c;</sys:String>
 
     <!-- 主题 / 调色盘 -->
     <sys:String x:Key="IconTheme">&#xeaec;</sys:String>
 
-    <!-- 自动更新。字体里只有一朵云，没有刷新箭头，现有字形里没有更合适的，保留待补字形。 -->
+    <!-- 自动更新 / 云 -->
     <sys:String x:Key="IconUpdate">&#xe678;</sys:String>
 
-    <!-- 更新源。同上：这个码位实际是“‹”左尖括号，不是下载箭头。 -->
-    <sys:String x:Key="IconDownload">&#xe64e;</sys:String>
+    <!-- 刷新。字形是一片翻页箭头中间嵌一个 ¥，正好当"刷新账目"用。 -->
+    <sys:String x:Key="IconRefresh">&#xe6b0;</sys:String>
 
-    <!-- 统计。字体里没有饼图/柱状图/折线这类字形，所以和 IconDeleteGeometry 一样给矢量几何。
-
-         画法：把圆环拆成两段半圆弧线（各 180°，用两个 ArcSegment 拼回整圈），
-         中间留 0.45 的缺口，再加一根从内圈到外圈的半径线，读起来就是"一段被拎出来的扇形"。
-         坐标写在 13×13 的框里，半径 6.0、笔宽 1.2 时外缘正好 6.6，不会溢出。
-         引用方按原尺寸画，不要设 Stretch：拉伸会把 1.2px 的线宽一起缩放。 -->
-    <GeometryGroup x:Key="IconChartGeometry">
-        <PathGeometry Figures="M 9.10,2.48 A 4.6,4.6 0 1 1 4.39,2.48" />
-        <PathGeometry Figures="M 6.50,2.20 L 6.50,5.60" />
-    </GeometryGroup>
+    <!-- 更新源。字体里没有下载箭头，用列表图标代替：更新源是一个可选清单。 -->
+    <sys:String x:Key="IconSource">&#xe682;</sys:String>
 
 </ResourceDictionary>

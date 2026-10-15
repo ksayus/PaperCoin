@@ -25,7 +25,7 @@ public partial class Statistics : UserControl
     private const double BarStaggerMs = 45;
     private const double TrendGrowMs = 520;
     private const double TrendStaggerMs = 38;
-    private const double PanelMs = 220;
+
 
     /// <summary>排行条的最小可见宽度：占比极小的分类也要能看到一条，否则读成"没有数据"</summary>
     private const double MinBarWidth = 4;
@@ -38,7 +38,7 @@ public partial class Statistics : UserControl
     /// </summary>
     internal const string RevealAnimationName = "StatisticsReveal";
 
-    internal const string FocusAnimationName = "StatisticsFocus";
+
 
     /// <summary>圆环展开的实际播放段数，供 tools/UiSmokeTest 断言动效真的接上了</summary>
     internal int DonutPlayCount => CategoryDonut.SegmentsPlayed;
@@ -130,9 +130,7 @@ public partial class Statistics : UserControl
                 Dispatcher.BeginInvoke(new Action(Reveal), DispatcherPriority.Render);
                 break;
 
-            case nameof(StatisticsViewModel.IsFocusOpen):
-                PlayFocusTransition();
-                break;
+
         }
     }
 
@@ -210,32 +208,6 @@ public partial class Statistics : UserControl
         builder.Play();
     }
 
-    // ---- 排行下钻 ----
-
-    // ---- 下钻面板开合 ----
-
-    /// <summary>
-    /// 面板缩放 + 上浮入场。只在打开时播：关闭时 <see cref="UIElement.Visibility"/> 立刻变
-    /// <c>Collapsed</c>，再播退场动画也看不到。
-    /// </summary>
-    private void PlayFocusTransition()
-    {
-        if (Vm?.IsFocusOpen != true) return;
-
-        FocusShift.Y = 10;
-        FocusScale.ScaleX = 0.96;
-        FocusScale.ScaleY = 0.96;
-
-        LA.Builder(FocusAnimationName)
-            .Ease(Easing.OutCubic)
-            .Move(FocusShift, 0, 0, PanelMs)
-            .Play();
-
-        LA.Builder($"{FocusAnimationName}_Scale")
-            .Ease(Easing.OutBack(2.0))
-            .Scale(FocusScale, 1.0, PanelMs * 1.4)
-            .Play();
-    }
 
     // ---- 自动化验证入口（仅供 tools/UiSmokeTest 使用，internal + InternalsVisibleTo）----
 
@@ -243,7 +215,72 @@ public partial class Statistics : UserControl
     internal Button? FindRankRowForTest()
         => Descendants<Button>(RankList, "").FirstOrDefault(b => b.DataContext is CategoryRankRow);
 
+    /// <summary>
+    /// 让三块图表直接落到展开完成的状态，不播动画。
+    /// 截图宿主里没有渲染循环、LAE 时钟不推进，走动画的话圆环的描边宽度会停在 0，
+    /// 截出来的图看不出问题，截图就失去了核对的价值。
+    /// </summary>
+    internal void SettleChartsForTest()
+    {
+        // 先把可见性落地：环所在的 Grid 绑定了 HasExpense，而数据是异步到的，
+        // 到截图这一刻绑定未必已经传播完 —— 那时 Grid 还是 Collapsed，弧线画了也看不见。
+        Dispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+
+        // 冻结展开动画：宿主里 LAE 时钟不推进，不冻结的话弧线永远停在 0 宽度
+        CategoryDonut.AnimationFrozen = true;
+
+        // 再跑一次真实布局：弧线是在 Arrange 里按最终尺寸生成的
+        UpdateLayout();
+
+        CategoryDonut.SnapToRevealed();
+
+        var bars = Descendants<Border>(RankList, "RankBar").ToList();
+        var rows = Vm?.VisibleRankRows ?? [];
+
+        for (int i = 0; i < bars.Count && i < rows.Count; i++)
+            bars[i].Width = Math.Max(MinBarWidth, rows[i].BarFraction * RankList.ActualWidth);
+
+        var trendBars = Descendants<Border>(TrendList, "TrendBar").ToList();
+        var trend = Vm?.TrendBars ?? [];
+
+        for (int i = 0; i < trendBars.Count && i < trend.Count; i++)
+            trendBars[i].Height = Math.Max(3, trend[i].HeightFraction * TrendMaxHeight);
+
+        UpdateLayout();
+    }
+
+    /// <summary>截图模式用的图表状态，用来判断"环没画出来"是布局没跑还是动画没播</summary>
+    internal string DonutSnapshot
+    {
+        get
+        {
+            var paths = new List<System.Windows.Shapes.Path>();
+            CollectDescendants(CategoryDonut, paths);
+
+            var detail = string.Join(" ", paths.Select(p =>
+                $"[{p.StrokeThickness:0.#}px {(p.Stroke as SolidColorBrush)?.Color.ToString() ?? "无画刷"}]"));
+
+            return $"环: 段数={CategoryDonut.SegmentSweeps.Count} " +
+                   $"子元素={VisualTreeHelper.GetChildrenCount(CategoryDonut)} " +
+                   $"尺寸={CategoryDonut.ActualWidth:0.#}×{CategoryDonut.ActualHeight:0.#} " +
+                   $"可见={CategoryDonut.IsVisible} 诊断={CategoryDonut.LastRebuildDiagnostic} {detail}";
+        }
+    }
+
     // ---- 可视树工具 ----
+
+    /// <summary>按类型深度优先收集可视后代</summary>
+    private static void CollectDescendants<T>(DependencyObject root, List<T> into)
+        where T : DependencyObject
+    {
+        int count = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match) into.Add(match);
+            CollectDescendants(child, into);
+        }
+    }
 
     /// <summary>
     /// 按名字深度优先收集指定类型的后代元素，顺序为文档顺序。

@@ -130,7 +130,7 @@
                         <StackPanel Grid.Column="0" Orientation="Horizontal"
                                     VerticalAlignment="Center">
                             <TextBlock Style="{DynamicResource SettingRowIcon}"
-                                       Text="{DynamicResource IconDownload}"/>
+                                       Text="{DynamicResource IconSource}"/>
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock Text="更新源" FontSize="13"
                                            Foreground="{DynamicResource ColorTextTitle}"/>

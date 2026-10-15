@@ -37,6 +37,19 @@ $cases = @(
         From = '        return (int)(hash % SlotCount);'
         To   = '        return Math.Abs(category.Trim().ToLowerInvariant().GetHashCode()) % SlotCount;'
         Test = '20.'
+    },    @{
+        Name = '圆环不做布局（改回 FrameworkElement 挂可视子元素）'
+        File = 'PaperCoin\Controls\DonutChart.cs'
+        From = '        return base.ArrangeOverride(finalSize);'
+        To   = '        return finalSize;'
+        Test = '23.'
+    },
+    @{
+        Name = '指示器漏掉统计项（switch 默认分支兜底）'
+        File = 'PaperCoin\MainWindow.xaml.cs'
+        From = '            NavItem.Statistics => StatisticsBtn,'
+        To   = '            NavItem.Statistics => SettingsBtn,'
+        Test = '3.'
     }
 )
 

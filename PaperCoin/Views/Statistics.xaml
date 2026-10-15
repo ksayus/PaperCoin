@@ -48,6 +48,31 @@
             <Setter Property="CornerRadius" Value="1.5"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
+
+        <!-- 图例行：本身是按钮，点了就把该分类的明细选到下面那块。
+             不加模板的话按钮会带上系统按钮的边框与底色，与卡片风格冲突。 -->
+        <Style x:Key="LegendItem" TargetType="{x:Type Button}">
+            <Setter Property="Margin" Value="0,0,0,2"/>
+            <Setter Property="Padding" Value="4,3"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type Button}">
+                        <Border x:Name="Bd" CornerRadius="5" Padding="{TemplateBinding Padding}"
+                                Background="Transparent">
+                            <ContentPresenter HorizontalAlignment="Stretch"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background"
+                                        Value="{DynamicResource ColorCardActionBackground}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </UserControl.Resources>
 
     <Border CornerRadius="0,0,7,0" ClipToBounds="True">
@@ -83,9 +108,18 @@
                     <Button Content="导出" Style="{DynamicResource PillButton}"
                             VerticalAlignment="Center" Margin="0,0,4,0"
                             Command="{Binding ExportCsvCommand}"/>
-                    <Button Content="刷新" Style="{DynamicResource PillButton}"
+                    <!-- 刷新按钮：图标取自 iconfont 的 U+E6B0，与正文同一行内联 -->
+                    <Button Style="{DynamicResource PillButton}"
                             VerticalAlignment="Center"
-                            Command="{Binding RefreshCommand}"/>
+                            Command="{Binding RefreshCommand}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="{DynamicResource IconRefresh}"
+                                       FontFamily="{DynamicResource Iconfont}"
+                                       FontSize="13" VerticalAlignment="Center"
+                                       Margin="0,0,4,0"/>
+                            <TextBlock Text="刷新" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
             </Grid>
 
@@ -104,8 +138,11 @@
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
 
-                            <!-- 环 + 圆心文字。圆心文字放在环之上，不参与环的布局。 -->
-                            <Grid Grid.Row="0" Height="150">
+                            <!-- 环 + 圆心文字。圆心文字放在环之上，不参与环的布局。
+                                 没有支出时两者都不显示，改用下面那句提示替代 —— 否则空环上会
+                                 同时叠着"总支出 0.00"和"这个范围内没有支出"，读起来像重复报错。 -->
+                            <Grid Grid.Row="0" Height="150"
+                                  Visibility="{Binding HasExpense, Converter={StaticResource BoolToVis}}">
                                 <ctl:DonutChart x:Name="CategoryDonut" RingThickness="26"
                                                 ItemsSource="{Binding Segments}"/>
 
@@ -124,45 +161,53 @@
                                 </StackPanel>
                             </Grid>
 
-                            <!-- 只有收入没有支出时环是空的，用一句话替代空环 -->
+                            <!-- 只有收入没有支出时环是空的，用一句话替代空环。
+                                 条件是 HasNoExpense（Positive 语义），之前这里错用了 HasExpense，
+                                 于是"有支出"时反而显示这句提示，还叠在圆心金额上。 -->
                             <TextBlock Grid.Row="0" Text="这个范围内没有支出"
                                        FontSize="11" HorizontalAlignment="Center"
                                        VerticalAlignment="Center"
                                        Foreground="{DynamicResource ColorTextSecondary}"
-                                       Visibility="{Binding HasExpense, Converter={StaticResource BoolToVis}}"/>
+                                       Visibility="{Binding HasNoExpense, Converter={StaticResource BoolToVis}}"/>
 
-                            <!-- 图例。最多 5 行（ViewModel 只给 5 行），每行"色块 名称 … 金额 占比" -->
+                            <!-- 图例。最多 5 行（ViewModel 只给 5 行），每行本身就是选中该分类的按钮，
+                                 与排行行、下拉选择走同一个命令。 -->
                             <ItemsControl Grid.Row="1" Margin="0,10,0,0"
                                           ItemsSource="{Binding LegendRows}"
                                           Visibility="{Binding HasExpense,
                                                        Converter={StaticResource BoolToVis}}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Grid Margin="0,0,0,4">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
+                                        <Button Style="{StaticResource LegendItem}"
+                                                Command="{Binding DataContext.ShowCategoryCommand,
+                                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                CommandParameter="{Binding Label}">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
 
-                                            <Border Grid.Column="0" Style="{DynamicResource CategorySwatch}"
-                                                    Margin="0,0,7,0"
-                                                    Background="{Binding ColorKey, Converter={StaticResource CategoryBrush}}"/>
+                                                <Border Grid.Column="0" Style="{DynamicResource CategorySwatch}"
+                                                        Margin="0,0,7,0"
+                                                        Background="{Binding ColorKey, Converter={StaticResource CategoryBrush}}"/>
 
-                                            <TextBlock Grid.Column="1" Text="{Binding Label}"
-                                                       FontSize="11" TextTrimming="CharacterEllipsis"
-                                                       Foreground="{DynamicResource ColorTextTitle}"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding Label}"
+                                                           FontSize="11" TextTrimming="CharacterEllipsis"
+                                                           Foreground="{DynamicResource ColorTextTitle}"/>
 
-                                            <TextBlock Grid.Column="2" Text="{Binding AmountText}"
-                                                       FontSize="11" Margin="8,0,0,0"
-                                                       Foreground="{DynamicResource ColorTextTitle}"/>
+                                                <TextBlock Grid.Column="2" Text="{Binding AmountText}"
+                                                           FontSize="11" Margin="8,0,0,0"
+                                                           Foreground="{DynamicResource ColorTextTitle}"/>
 
-                                            <TextBlock Grid.Column="3" Text="{Binding ShareText}"
-                                                       FontSize="10" Margin="8,0,0,0" MinWidth="38"
-                                                       TextAlignment="Right"
-                                                       Foreground="{DynamicResource ColorTextSecondary}"/>
-                                        </Grid>
+                                                <TextBlock Grid.Column="3" Text="{Binding ShareText}"
+                                                           FontSize="10" Margin="8,0,0,0" MinWidth="38"
+                                                           TextAlignment="Right"
+                                                           Foreground="{DynamicResource ColorTextSecondary}"/>
+                                            </Grid>
+                                        </Button>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
@@ -190,14 +235,16 @@
                     <Border Style="{DynamicResource SettingRow}">
                         <Grid>
                             <ItemsControl x:Name="RankList" Background="Transparent"
-                                          ItemsSource="{Binding VisibleRankRows}">
+                                          ItemsSource="{Binding VisibleRankRows}"
+                                          Visibility="{Binding HasExpense,
+                                                       Converter={StaticResource BoolToVis}}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <Button Style="{StaticResource RankItem}"
                                                 Tag="{Binding}"
-                                                Command="{Binding DataContext.OpenFocusCommand,
+                                                Command="{Binding DataContext.ShowCategoryCommand,
                                                           RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                CommandParameter="{Binding}">
+                                                CommandParameter="{Binding Label}">
                                             <!-- 条形背景铺满整行，数字压在条形之上：文字宽度随内容变，
                                                  让条形去避让文字需要额外测量，铺底更稳。 -->
                                             <Grid Height="34" Background="Transparent">
@@ -300,9 +347,93 @@
                         </ItemsControl>
                     </Border>
 
+                    <!-- 分类明细：看某一个分类的**全部**流水，不受上面的时间范围限制。
+                         点排行行、点图例色块、或从这里下拉选，都会切到同一个分类。 -->
+                    <Grid Margin="2,10,2,6">
+                        <TextBlock Text="分类明细" Style="{DynamicResource SettingGroupTitle}"
+                                   Margin="0" VerticalAlignment="Center"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <ComboBox x:Name="CategoryPicker" MinWidth="96" FontSize="11"
+                                      Style="{DynamicResource ComboBoxThemed}"
+                                      ItemsSource="{Binding Categories}"
+                                      SelectedItem="{Binding SelectedCategory, Mode=OneWay}"/>
+                            <Button Content="清除" Style="{DynamicResource PillButton}"
+                                    Padding="8,2" FontSize="10" Margin="6,0,0,0"
+                                    Command="{Binding ClearCategoryCommand}"
+                                    Visibility="{Binding HasCategorySelection,
+                                                 Converter={StaticResource BoolToVis}}"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <Border Style="{DynamicResource SettingRow}">
+                        <StackPanel>
+                            <!-- 没选分类时的引导语 -->
+                            <TextBlock Text="点上面的排行行或图例，或从右侧下拉里选一个分类，查看它的全部流水"
+                                       FontSize="11" TextWrapping="Wrap" Margin="2,2,2,2"
+                                       Foreground="{DynamicResource ColorTextSecondary}"
+                                       Visibility="{Binding HasCategorySelection,
+                                                    Converter={StaticResource InverseBoolToVis}}"/>
+
+                            <StackPanel Visibility="{Binding HasCategorySelection,
+                                                     Converter={StaticResource BoolToVis}}">
+                                <Grid Margin="2,0,2,6">
+                                    <TextBlock Text="{Binding CategoryDetailTitle}"
+                                               FontSize="13" FontWeight="SemiBold"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{DynamicResource ColorTextTitle}"/>
+                                    <TextBlock Text="全部时间" FontSize="10"
+                                               HorizontalAlignment="Right" VerticalAlignment="Center"
+                                               Foreground="{DynamicResource ColorTextSecondary}"/>
+                                </Grid>
+
+                                <TextBlock Text="{Binding CategorySummaryText}"
+                                           FontSize="10" Margin="2,0,2,8"
+                                           TextWrapping="Wrap"
+                                           Foreground="{DynamicResource ColorTextSecondary}"/>
+
+                                <!-- 明细条数可能不少，给一个上限后自己滚动，避免把页面拉得过长 -->
+                                <ScrollViewer MaxHeight="220"
+                                              VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsControl x:Name="CategoryDetailList"
+                                                  ItemsSource="{Binding CategoryEntries}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="2,0,2,7">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+
+                                                    <TextBlock Grid.Column="0" Text="{Binding DateText}"
+                                                               FontSize="10" Width="38"
+                                                               VerticalAlignment="Center"
+                                                               Foreground="{DynamicResource ColorTextSecondary}"/>
+
+                                                    <TextBlock Grid.Column="1" Text="{Binding Description}"
+                                                               FontSize="12" Margin="6,0,0,0"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               VerticalAlignment="Center"
+                                                               Foreground="{DynamicResource ColorTextTitle}"/>
+
+                                                    <TextBlock Grid.Column="2" Text="{Binding AmountText}"
+                                                               FontSize="12" Margin="10,0,0,0"
+                                                               VerticalAlignment="Center"
+                                                               Foreground="{DynamicResource ColorTextTitle}"/>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
                     <!-- 收支概览 -->
                     <TextBlock Text="收支概览" Style="{DynamicResource SettingGroupTitle}"
                                Margin="2,10,0,6"/>
+
                     <Border Style="{DynamicResource SettingRow}">
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -357,79 +488,6 @@
                        TextWrapping="Wrap"
                        Foreground="{DynamicResource ColorTextSecondary}"
                        Visibility="{Binding HasNotice, Converter={StaticResource BoolToVis}}"/>
-
-            <!-- 下钻面板。与账单编辑面板同一套遮罩 + 滑入做法，开合逻辑见代码后置。 -->
-            <Grid x:Name="FocusOverlay" Grid.RowSpan="3"
-                  Margin="-16,-12,-16,-12"
-                  Panel.ZIndex="10"
-                  Background="#66000000"
-                  Visibility="{Binding IsFocusOpen, Converter={StaticResource BoolToVis}}">
-                <Border x:Name="FocusPanel" Width="300" MaxHeight="420"
-                        HorizontalAlignment="Center" VerticalAlignment="Center"
-                        CornerRadius="10"
-                        Background="{DynamicResource ColorCardBackground}"
-                        BorderBrush="{DynamicResource ColorCardBorder}"
-                        BorderThickness="1"
-                        RenderTransformOrigin="0.5,0.5">
-                    <Border.RenderTransform>
-                        <TransformGroup>
-                            <ScaleTransform x:Name="FocusScale" ScaleX="1" ScaleY="1"/>
-                            <TranslateTransform x:Name="FocusShift" Y="0"/>
-                        </TransformGroup>
-                    </Border.RenderTransform>
-
-                    <Grid Margin="14,12,14,12">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-
-                        <TextBlock Grid.Row="0" Text="{Binding FocusTitle}"
-                                   FontSize="14" FontWeight="Bold"
-                                   TextTrimming="CharacterEllipsis"
-                                   Foreground="{DynamicResource ColorTextTitle}"/>
-
-                        <TextBlock Grid.Row="1" Text="{Binding FocusSummaryText}"
-                                   FontSize="10" Margin="0,3,0,8"
-                                   Foreground="{DynamicResource ColorTextSecondary}"/>
-
-                        <ScrollViewer Grid.Row="2" MaxHeight="280"
-                                      VerticalScrollBarVisibility="Auto"
-                                      HorizontalScrollBarVisibility="Disabled">
-                            <ItemsControl ItemsSource="{Binding FocusEntries}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Grid Margin="0,0,0,7">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel Grid.Column="0">
-                                                <TextBlock Text="{Binding Description}" FontSize="12"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           Foreground="{DynamicResource ColorTextTitle}"/>
-                                                <TextBlock Text="{Binding DateText}" FontSize="10"
-                                                           Margin="0,1,0,0"
-                                                           Foreground="{DynamicResource ColorTextSecondary}"/>
-                                            </StackPanel>
-                                            <TextBlock Grid.Column="1" Text="{Binding AmountText}"
-                                                       FontSize="12" Margin="10,0,0,0"
-                                                       VerticalAlignment="Center"
-                                                       Foreground="{DynamicResource ColorNegative}"/>
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
-
-                        <Button Grid.Row="3" Content="关闭" Style="{DynamicResource PillButton}"
-                                HorizontalAlignment="Right" Margin="0,10,0,0"
-                                Command="{Binding CloseFocusCommand}"/>
-                    </Grid>
-                </Border>
-            </Grid>
         </Grid>
     </Border>
 </UserControl>

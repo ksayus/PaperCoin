@@ -1,6 +1,7 @@
 ﻿using System.Collections;
 using System.Collections.Specialized;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using LAE;
@@ -20,8 +21,15 @@ namespace PaperCoin.Controls;
 /// 这里改成对**预先算好的**弧线做描边宽度展开，并按顺序错开：
 /// 描边宽度是常量依赖属性，LAE 写它不产生任何几何重建。
 /// </para>
+/// <para>
+/// 继承 <see cref="Canvas"/> 而不是 <see cref="FrameworkElement"/>：弧线要以
+/// <see cref="Panel.Children"/> 的形式挂进来，让布局系统自己去量、去摆。
+/// 早先的版本自己调 <c>AddVisualChild</c> 挂可视子元素，但从不为它们调 <c>Arrange</c> ——
+/// 那些弧线的 <c>RenderSize</c> 一直是 0×0，渲染时被整批跳过，界面上一个环都看不到，
+/// 而且不报任何错。这属于"挂上去 ≠ 画出来"。
+/// </para>
 /// </summary>
-public sealed class DonutChart : FrameworkElement
+public sealed class DonutChart : Canvas
 {
     /// <summary>段与段之间留的缝（弧度）。不留缝时相邻两段颜色接近就看不出分界。</summary>
     private const double GapRadians = 0.022;
@@ -40,21 +48,32 @@ public sealed class DonutChart : FrameworkElement
     private double _builtWidth = double.NaN;
     private double _builtHeight = double.NaN;
 
+    /// <summary>
+    /// 本控件是否已经展开过。
+    /// <para>
+    /// 用途见 <see cref="Rebuild"/>：尺寸一变就要重建弧线，而新建弧线的描边宽度是 0
+    /// （展开动画的起点）。展开过之后再重建就必须直接落到最终宽度，否则窗口一拉伸，
+    /// 整个环就消失，而且不报任何错。
+    /// </para>
+    /// </summary>
+    private bool _revealed;
+
     /// <summary>已经播完展开动画的分段数，供 tools/UiSmokeTest 断言动效真的接上了</summary>
     public int SegmentsPlayed { get; private set; }
+
+    /// <summary>
+    /// 冻结展开动画：期间重建的弧线直接落到最终描边宽度，不经过 0 起点。
+    /// 供截图与静态核对使用 —— 没有渲染循环的宿主里 LAE 时钟不推进，
+    /// 走动画的话截出来永远是一个空环。
+    /// </summary>
+    internal bool AnimationFrozen { get; set; }
+
 
     /// <summary>每段实际画出的角度（弧度），供测试核对角度分配与占比一致</summary>
     internal IReadOnlyList<double> SegmentSweeps { get; private set; } = [];
 
     /// <summary>最近一次重建的结果，供 tools/UiSmokeTest 定位"为什么一条弧都没有"</summary>
     internal string LastRebuildDiagnostic { get; private set; } = "(尚未重建)";
-
-    public DonutChart()
-    {
-        // 尺寸完全交给父容器：自己定尺寸会让布局随数据量跳动。
-        // 尺寸变化不在这里订阅 SizeChanged —— 那时 ActualWidth 已是新值但几何还没重算，
-        // 而 ArrangeOverride 紧接着就会带着最终尺寸重建一次，订阅只会多做一遍。
-    }
 
     // ---- 依赖属性 ----
 
@@ -117,7 +136,15 @@ public sealed class DonutChart : FrameworkElement
 
     private static void OnPlayedChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
-        if (e.NewValue is true) ((DonutChart)d).RevealAll();
+        if (e.NewValue is not true) return;
+
+        var chart = (DonutChart)d;
+
+        // 还没画过弧线（布局未完成或数据未到）时不能置 _revealed：置了以后
+        // 第一次重建会直接落到最终宽度，展开动画就永远不会播了。
+        if (chart._segmentPaths.Count == 0) return;
+
+        chart.RevealAll();
     }
 
     private void OnItemsChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -136,10 +163,7 @@ public sealed class DonutChart : FrameworkElement
     /// </summary>
     private void Rebuild(Size size)
     {
-        // 逐个摘掉旧子元素：VisualCollection 没有 Clear，只能反向删
-        for (int i = VisualTreeHelper.GetChildrenCount(this) - 1; i >= 0; i--)
-            RemoveVisualChild((Visual)VisualTreeHelper.GetChild(this, i));
-
+        Children.Clear();
         _segmentPaths.Clear();
 
         if (ItemsSource is not IEnumerable source || size.Width <= 0 || size.Height <= 0)
@@ -163,6 +187,7 @@ public sealed class DonutChart : FrameworkElement
         if (radius <= 0)
         {
             LastRebuildDiagnostic = $"提前返回: 半径 {radius:0.#} <= 0 (笔宽 {RingThickness:0.#})";
+            SegmentSweeps = [];
             return;
         }
 
@@ -182,7 +207,10 @@ public sealed class DonutChart : FrameworkElement
             double drawn = Math.Max(MinSweep / 2, sweep - gap);
 
             // 起点固定在 -90°（12 点），并按金额降序排列：占比最大的那一块从正上方开始
-            _segmentPaths.Add(CreateSegmentPath(center, radius, cursor, drawn, segment));
+            var path = CreateSegmentPath(center, radius, cursor, drawn, segment);
+
+            _segmentPaths.Add(path);
+            Children.Add(path);
 
             // 间隔在绘制之后推进：留缝是从这一段末尾扣掉的，不是从下一段开头
             cursor += sweep;
@@ -191,8 +219,13 @@ public sealed class DonutChart : FrameworkElement
 
         SegmentSweeps = sweeps;
 
-        foreach (var path in _segmentPaths)
-            AddVisualChild(path);
+        // 冻结中，或已经展开过：新弧线直接落到最终描边宽度。不补这一步，窗口尺寸一变
+        // 环就整条消失（新弧线的起点宽度是 0，不会再有人来推进它）。
+        if (AnimationFrozen || _revealed)
+        {
+            foreach (var path in _segmentPaths)
+                path.StrokeThickness = RingThickness;
+        }
     }
 
     private Path CreateSegmentPath(
@@ -220,8 +253,9 @@ public sealed class DonutChart : FrameworkElement
         {
             Data = new PathGeometry([figure]),
 
-            // 展开动画从 0 描边开始，静止值由 RevealAll 写到 RingThickness
-            StrokeThickness = 0,
+            // 展开动画从 0 描边开始，静止值由 RevealAll 写到 RingThickness。
+            // 冻结时直接给最终值，否则渲染出来是个空环。
+            StrokeThickness = AnimationFrozen ? RingThickness : 0,
             StrokeStartLineCap = PenLineCap.Flat,
             StrokeEndLineCap = PenLineCap.Flat,
             ToolTip = segment.Tooltip
@@ -236,15 +270,15 @@ public sealed class DonutChart : FrameworkElement
     private static Point OnCircle(Point center, double radius, double angle)
         => new(center.X + radius * Math.Cos(angle), center.Y + radius * Math.Sin(angle));
 
-    // ---- 可视子元素 ----
-
-    protected override int VisualChildrenCount => _segmentPaths.Count;
-
-    protected override Visual GetVisualChild(int index) => _segmentPaths[index];
+    // ---- 布局 ----
 
     /// <summary>
     /// 尺寸在 Arrange 阶段才最终确定，而半径依赖最终尺寸，所以几何重建放这里。
-    /// Measure 不提需求：环应由父容器分配空间，自己定尺寸会让布局随数据量跳动。
+    /// <para>
+    /// 注意 <see cref="FrameworkElement.ActualWidth"/> 在这一刻还没被赋值，必须用
+    /// <paramref name="finalSize"/>；重建之后再交给基类摆放弧线
+    /// （这一步不能省：不被 Arrange 的子元素 RenderSize 是 0，渲染时会被跳过）。
+    /// </para>
     /// </summary>
     protected override Size ArrangeOverride(Size finalSize)
     {
@@ -260,7 +294,7 @@ public sealed class DonutChart : FrameworkElement
             Rebuild(finalSize);
         }
 
-        return finalSize;
+        return base.ArrangeOverride(finalSize);
     }
 
     // ---- 动画 ----
@@ -274,6 +308,7 @@ public sealed class DonutChart : FrameworkElement
         if (_segmentPaths.Count == 0) return;
 
         SegmentsPlayed = 0;
+        _revealed = true;
 
         var builder = LA.Builder("StatisticsDonut").Ease(Easing.OutCubic);
 
@@ -291,5 +326,22 @@ public sealed class DonutChart : FrameworkElement
         }
 
         builder.Play();
+    }
+
+    /// <summary>
+    /// 直接落到展开完成的状态，不播动画。
+    /// <para>
+    /// 供截图模式使用：截图宿主里没有渲染循环，LAE 的时钟不推进，走动画的话
+    /// 描边宽度会停在 0，截出来的环永远是空的 —— 那样截图就失去了核对的价值。
+    /// 这也正好覆盖 <see cref="Rebuild"/> 里"展开过之后再重建"那条路径。
+    /// </para>
+    /// </summary>
+    internal void SnapToRevealed()
+    {
+        _revealed = true;
+        SegmentsPlayed = _segmentPaths.Count;
+
+        foreach (var path in _segmentPaths)
+            path.StrokeThickness = RingThickness;
     }
 }
