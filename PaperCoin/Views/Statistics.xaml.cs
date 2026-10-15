@@ -105,7 +105,16 @@ public partial class Statistics : UserControl
         _ = Dispatcher.BeginInvoke(new Action(Reveal), DispatcherPriority.Render);
     }
 
-    /// <summary>播放全部展开动画。同一轮里重复调用只播一次。</summary>
+    /// <summary>展开动画放过的轮数，供 tools/UiSmokeTest 断言每次进场都重播</summary>
+    internal int RevealRounds { get; private set; }
+
+    /// <summary>圆环当前的段数，供测试诊断"为什么没重播"</summary>
+    internal int DonutSegmentCountForTest => CategoryDonut.SegmentSweeps.Count;
+
+    /// <summary>圆环 Played 开关的当前值，同上</summary>
+    internal bool DonutPlayedForTest => CategoryDonut.Played;
+
+    /// <summary>播放全部展开动画。同一轮里重复调用只播一次，但每次进场都会重新开一轮。</summary>
     private void Reveal()
     {
         if (_revealed) return;
@@ -114,8 +123,14 @@ public partial class Statistics : UserControl
         if (Vm is null) return;
 
         _revealed = true;
+        RevealRounds++;
 
+        // 先把圆环退回未展开状态再置 true。
+        // Played 是依赖属性，值没变就不会触发 PropertyChanged 回调 ——
+        // 上一轮留着的 true 会让这一次的赋值被判定成"没变化"，弧线停在满宽不动。
+        CategoryDonut.Played = false;
         CategoryDonut.Played = true;
+
         AnimateRankBars();
         AnimateTrendBars();
     }

@@ -1,4 +1,4 @@
-using System.Collections.Specialized;
+﻿using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
@@ -130,6 +130,7 @@ public partial class TodayBill : UserControl
 
         // 换页时摘掉钩子并复位入场标志，切回来才能重播
         _cardEntrance.Reset();
+        _emptyHintShown = false;
 
         if (_reflowPending)
         {

@@ -63,6 +63,28 @@ $cases = @(
         From = '                                              TextElement.Foreground="{DynamicResource ColorTextTitle}"/>'
         To   = '                                              />'
         Test = '24.'
+    },    @{
+        Name = '统计页不重播展开动画（Reveal 直接置 true）'
+        File = 'PaperCoin\Views\Statistics.xaml.cs'
+        From = '        CategoryDonut.Played = false;
+        CategoryDonut.Played = true;'
+        To   = '        CategoryDonut.Played = true;'
+        Test = '24.'
+    },
+    @{
+        Name = '年视图整片入场不按当前粒度判断'
+        File = 'PaperCoin\Views\CalenderBill.xaml.cs'
+        From = '        if (Vm?.IsYearMode != true) return;'
+        To   = '        if (Vm is null) return;'
+        Test = '26.'
+    },
+    @{
+        Name = '今日页进场不复位空提示标志'
+        File = 'PaperCoin\Views\TodayBill.xaml.cs'
+        From = '        _cardEntrance.Reset();
+        _emptyHintShown = false;'
+        To   = '        _cardEntrance.Reset();'
+        Test = '26.'
     }
 )
 
@@ -108,7 +130,7 @@ foreach ($case in $cases) {
 
         $output = Invoke-Smoke $case.Name
 
-        $hit = $output | Select-String -Pattern "^\[测试\] $([regex]::Escape($case.Test))" -Context 0, 12
+        $hit = $output | Select-String -Pattern "^\[测试\] $([regex]::Escape($case.Test))" -Context 0, 40
         $line = ($hit | Select-Object -First 1)
         $block = if ($line) { ($line.Line + "`n" + ($line.Context.PostContext -join "`n")) } else { '' }
         $isFail = $block -match '结果: 失败'

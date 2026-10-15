@@ -37,6 +37,9 @@ public sealed class DonutChart : Canvas
     /// <summary>环上只有一段时不留缝，否则会看到一道缺口。</summary>
     private const double SingleSegmentGap = 0.0;
 
+    /// <summary>展开动画的注册名。重播前要按它停掉在跑的那一条。</summary>
+    private const string RevealGroupName = "StatisticsDonut";
+
     private const double RevealMs = 420;
     private const double StaggerMs = 55;
 
@@ -136,15 +139,39 @@ public sealed class DonutChart : Canvas
 
     private static void OnPlayedChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
-        if (e.NewValue is not true) return;
-
         var chart = (DonutChart)d;
+
+        // false → 收起：弧线退回未展开状态，供下一次进场重播。
+        // 少了这一支，回调只在 false→true 那一次触发，之后再置 true 不算变化、不会再播，
+        // 症状就是"只有第一次进页面有动画"。
+        if (e.NewValue is not true)
+        {
+            chart.Reset();
+            return;
+        }
 
         // 还没画过弧线（布局未完成或数据未到）时不能置 _revealed：置了以后
         // 第一次重建会直接落到最终宽度，展开动画就永远不会播了。
         if (chart._segmentPaths.Count == 0) return;
 
         chart.RevealAll();
+    }
+
+    /// <summary>
+    /// 收起展开状态：弧线退回描边宽度 0，播放计数清零。
+    /// 供视图在每次进场前调用，让展开动画能够重播。
+    /// </summary>
+    internal void Reset()
+    {
+        _revealed = false;
+        SegmentsPlayed = 0;
+
+        // 停掉在跑的展开动画：不停的话它会继续往弧线上写描边宽度，
+        // 把刚清掉的起点又推上去，重播就成了从中间接着放。
+        LAEngine.Stop(RevealGroupName);
+
+        foreach (var path in _segmentPaths)
+            path.StrokeThickness = 0;
     }
 
     private void OnItemsChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -307,10 +334,11 @@ public sealed class DonutChart : Canvas
     {
         if (_segmentPaths.Count == 0) return;
 
-        SegmentsPlayed = 0;
+        // 这里不清 SegmentsPlayed：它归 Reset 清。两处都清的话，新一轮刚开始就被抹平，
+        // 外面无法用"计数涨没涨"判断动画究竟播了没有。
         _revealed = true;
 
-        var builder = LA.Builder("StatisticsDonut").Ease(Easing.OutCubic);
+        var builder = LA.Builder(RevealGroupName).Ease(Easing.OutCubic);
 
         for (int i = 0; i < _segmentPaths.Count; i++)
         {

@@ -117,6 +117,7 @@ internal static class Program
             failures += Check("23. 圆环几何与占比一致", TestDonutGeometry);
             failures += Check("24. 统计页接入导航并播放展开动效", TestStatisticsPage);
             failures += Check("25. 统计 CSV 带 BOM", TestStatisticsCsv);
+            failures += Check("26. 每次进页面都重播入场动画", TestEntranceReplaysOnEveryEntry);
         });
 
         Console.WriteLine();
@@ -3269,6 +3270,146 @@ internal static class Program
         ResetBillsData();
     }
 
+    // ---- 26. 每次进页面都重播入场动画 ----
+
+    /// <summary>
+    /// 切走再切回，每个页面的入场动画都必须重新播一轮。
+    /// <para>
+    /// 页面实例被 MainWindow 长期缓存，控件不会重建 —— 所有"只播一次"的守卫标志
+    /// 都必须显式复位，漏掉任何一个，那个动画就只在本次进程第一次进页面时看得到。
+    /// 这类问题不会报错，只是动画悄悄没了。
+    /// </para>
+    /// </summary>
+    private static void TestEntranceReplaysOnEveryEntry()
+    {
+        DrainSaves();
+        ResetBillsData();
+
+        // 空数据：空提示入场才是这条链路上会走的动画，也最容易漏复位
+        var window = new MainWindow
+        {
+            Width = WindowWidth,
+            Height = WindowHeight,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -10000,
+            Top = -10000
+        };
+
+        window.Show();
+        Pump();
+
+        // MainWindow 的页面是按需创建的：没导航过的页面还不在缓存里，取不到。
+        // 先各走一遍，再开始计数。
+        window.NavigateForTest("CalenderBill");
+        Pump();
+        window.NavigateForTest("TodayBill");
+        Pump();
+
+        var today = window.FindPageForTest("TodayBill") as TodayBill
+            ?? throw new Exception("找不到今日页");
+
+        var calendar = window.FindPageForTest("CalenderBill") as CalenderBill
+            ?? throw new Exception("找不到日历页");
+
+        // ---- 今日页的空提示 ----
+        window.NavigateForTest("TodayBill");
+        Pump();
+        for (int i = 0; i < 8; i++) Pump();
+
+        int todayFirst = today.EmptyHintPlayCount;
+        Report($"今日页第一次进场：空提示播了 {todayFirst} 次");
+
+        if (todayFirst == 0)
+            throw new Exception("今日页第一次进场时空提示就没播，测试前提不成立");
+
+        window.NavigateForTest("Settings");
+        Pump();
+        window.NavigateForTest("TodayBill");
+        Pump();
+        for (int i = 0; i < 8; i++) Pump();
+
+        Report($"今日页第二次进场：空提示 {todayFirst} -> {today.EmptyHintPlayCount}");
+
+        if (today.EmptyHintPlayCount <= todayFirst)
+            throw new Exception(
+                $"第二次进今日页时空提示没有重播入场（{todayFirst} -> {today.EmptyHintPlayCount}）");
+
+        // ---- 日历页的空提示 ----
+        window.NavigateForTest("CalenderBill");
+        Pump();
+        for (int i = 0; i < 8; i++) Pump();
+
+        int calFirst = calendar.EmptyHintPlayCount;
+        Report($"日历页第一次进场：空提示播了 {calFirst} 次");
+
+        if (calFirst == 0)
+            throw new Exception("日历页第一次进场时空提示就没播，测试前提不成立");
+
+        window.NavigateForTest("Settings");
+        Pump();
+        window.NavigateForTest("CalenderBill");
+        Pump();
+        for (int i = 0; i < 8; i++) Pump();
+
+        Report($"日历页第二次进场：空提示 {calFirst} -> {calendar.EmptyHintPlayCount}");
+
+        if (calendar.EmptyHintPlayCount <= calFirst)
+            throw new Exception(
+                $"第二次进日历页时空提示没有重播入场（{calFirst} -> {calendar.EmptyHintPlayCount}）");
+
+        // ---- 日历页年视图的整片入场 ----
+        // 这个标志原来只在"本次进程第一次进年视图"时置一次，换页从不复位
+        window.NavigateForTest("CalenderBill");
+        Pump();
+
+        if (calendar.DataContext is not CalenderBillViewModel vm)
+            throw new Exception("日历页的 DataContext 不是 CalenderBillViewModel");
+
+        // 日视图下不该播：年视图的整片入场只在真的处于年视图时才播，
+        // 否则切页时就会凭空多播一轮。
+        int beforeYear = calendar.YearEntrancePlayCount;
+
+        if (beforeYear != 0)
+            throw new Exception($"还在日视图就播了年视图整片入场（{beforeYear} 次）");
+
+        vm.ShowYearCommand.Execute(null);
+        Pump();
+        for (int i = 0; i < 8; i++) Pump();
+
+        int yearFirst = calendar.YearEntrancePlayCount;
+        Report($"日视图下整片播放 {beforeYear} 次；切到年视图后 {yearFirst} 次");
+
+        if (yearFirst != 1)
+            throw new Exception($"切到年视图后整片入场播了 {yearFirst} 次，应当正好 1 次");
+
+        // 切走再回来，重新进年视图。走真实导航路径：MainWindow 换页会把页面摘掉再挂回来，
+        // 进场动画的复位就挂在 Loaded 上。自己造一个 DataContext 测不出这条路径。
+        window.NavigateForTest("Settings");
+        Pump();
+        window.NavigateForTest("CalenderBill");
+        Pump();
+
+        if (calendar.DataContext is CalenderBillViewModel vm2 && !vm2.IsYearMode)
+        {
+            vm2.ShowYearCommand.Execute(null);
+            Pump();
+        }
+
+        for (int i = 0; i < 8; i++) Pump();
+
+        Report($"年视图第二次入场：整片 {yearFirst} -> {calendar.YearEntrancePlayCount}");
+
+        if (yearFirst > 0 && calendar.YearEntrancePlayCount <= yearFirst)
+            throw new Exception(
+                $"第二次进年视图时整片入场没有重播（{yearFirst} -> {calendar.YearEntrancePlayCount}）");
+
+        window.Close();
+        Pump();
+
+        DrainSaves();
+        ResetBillsData();
+    }
+
     // ---- 23. 圆环几何 ----
 
     /// <summary>
@@ -3628,11 +3769,69 @@ internal static class Program
             throw new Exception(
                 $"下拉框选中项文本是黑色（#{color.R:X2}{color.G:X2}{color.B:X2}），暗色主题下几乎看不见");
 
+        // ---- 每次进场都要重播入场动画 ----
+        // 统计页实例被 MainWindow 缓存，切走再切回不会重建控件。展开状态如果不复位，
+        // 第二次进场时圆环、排行条、趋势柱都已经在收尾值上，动画等于没播。
+        AssertStatisticsReplaysOnEntry(window, page);
+
         window.Close();
         Pump();
 
         DrainSaves();
         ResetBillsData();
+    }
+
+    /// <summary>
+    /// 切走再切回统计页，断言三块图表的展开动画都重播了。
+    /// 只看"播放计数涨了"：本进程里 LAE 时钟不推进，动画会在第一次 Update 时直接落到终点，
+    /// 但计数（OnComplete 里的回调）照样会涨，所以它是可靠的信号。
+    /// </summary>
+    private static void AssertStatisticsReplaysOnEntry(MainWindow window, Statistics page)
+    {
+        Report("--- 切走再切回，检查入场动画是否重播 ---");
+
+        // 记下上一轮的计数，用来反向确认进场时确实被清零了
+        int rankBefore = page.RankBarsPlayCount;
+        int trendBefore = page.TrendBarsPlayCount;
+        int roundsBefore = page.RevealRounds;
+
+        // 切到别的页面再切回来
+        window.NavigateForTest("Settings");
+        Pump();
+
+        window.NavigateForTest("Statistics");
+        Pump();
+        SettleIndicator(window);
+
+        // 展开是排在 Render / Loaded 优先级的，多泵几轮等它跑完
+        for (int i = 0; i < 8; i++) Pump();
+
+        if (page.RevealRounds <= roundsBefore)
+            throw new Exception($"第二次进场没有开始新一轮展开（轮数 {roundsBefore} -> {page.RevealRounds}）");
+
+        Report($"  展开轮数 {roundsBefore} -> {page.RevealRounds}");
+        Report($"  圆环 本轮播完 {page.DonutPlayCount} / 共 {page.DonutSegmentCountForTest} 段");
+        Report($"  排行条 本轮播完 {page.RankBarsPlayCount}");
+        Report($"  趋势柱 本轮播完 {page.TrendBarsPlayCount}");
+        Report($"  排行条 {rankBefore} -> {page.RankBarsPlayCount}");
+        Report($"  趋势柱 {trendBefore} -> {page.TrendBarsPlayCount}");
+
+        // 这三个计数都是"本轮进度"：进场时由 Reset 清零，动画每完成一个元素加一。
+        // 所以第二次进场后它们必须重新涨满 —— 停在 0 说明压根没播，停在上一轮的值
+        // 说明连清零都没发生（那就等于没重播）。
+        if (page.DonutPlayCount != page.DonutSegmentCountForTest || page.DonutSegmentCountForTest == 0)
+            throw new Exception(
+                $"第二次进统计页时圆环没有重播展开动画（本轮播完 {page.DonutPlayCount} / 共 {page.DonutSegmentCountForTest} 段）");
+
+        if (page.RankBarsPlayCount == 0)
+            throw new Exception("第二次进统计页时排行条没有重播展开动画（本轮播完 0 条）");
+
+        if (page.TrendBarsPlayCount == 0)
+            throw new Exception("第二次进统计页时趋势柱没有重播展开动画（本轮播完 0 根）");
+
+        // 反向确认：上一轮的计数必须已经被清掉，否则上面的"== 段数"可能只是上一轮的残留
+        if (rankBefore == 0 || trendBefore == 0)
+            throw new Exception("第一次进场时排行条/趋势柱就没播过，测试前提不成立");
     }
 
     // ---- 25. 统计 CSV ----

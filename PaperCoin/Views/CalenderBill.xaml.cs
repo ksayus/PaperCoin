@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -72,8 +72,11 @@ public partial class CalenderBill : UserControl
     /// <summary>落定动画重入保护。快速连点翻页时不让两段动画互相打断。</summary>
     private bool _settling;
 
-    /// <summary>季节卡片入场是否已经播过（整页只播一次，之后换月不再重复）</summary>
+    /// <summary>年视图整片入场是否已经播过（本次进场只播一次，换页回来要重播）</summary>
     private bool _yearEntrancePlayed;
+
+    /// <summary>年视图整片入场的播放次数，供 tools/UiSmokeTest 断言每次进场都重播</summary>
+    internal int YearEntrancePlayCount { get; private set; }
 
     private CalenderBillViewModel? Vm => DataContext as CalenderBillViewModel;
 
@@ -100,12 +103,35 @@ public partial class CalenderBill : UserControl
         _entryEntrance.Reset();
         _entryEntrance.TryPlay();
 
+        // 年视图的整片入场是"每次进场重播一次"的量，换数据源时必须一起复位，
+        // 否则它只在本次进程第一次进年视图时看得到
+        _yearEntrancePlayed = false;
+
         // ViewModel 构造时就发起了首屏加载，数据可能早于本控件就绪，这里用 Loaded 优先级补播一次
         Dispatcher.BeginInvoke(new Action(() =>
         {
             // 首屏不做容器落定：数据可能比这次回调更早到，有数据时由卡片逐个入场，空的时候由空提示入场
             RequestEmptyHint();
+
+            // 进来时就已经是年视图（上次就停在这一档）也要给整片入场。
+            // 只靠 Mode 变化触发是不够的：重进时 Mode 本来就是 Year，那条分支根本不走，
+            // 症状是"只有本次进程第一次进年视图才有整片入场"。
+            TryPlayYearEntrance();
         }), DispatcherPriority.Loaded);
+    }
+
+    /// <summary>
+    /// 年视图的整片入场。本次进场没播过才播，换页回来会重新播一轮。
+    /// </summary>
+    private void TryPlayYearEntrance()
+    {
+        if (_yearEntrancePlayed) return;
+        if (Vm?.IsYearMode != true) return;
+
+        _yearEntrancePlayed = true;
+        YearEntrancePlayCount++;
+
+        Dispatcher.BeginInvoke(new Action(AnimateCardsIn), DispatcherPriority.Loaded);
     }
 
     /// <summary>
@@ -119,6 +145,8 @@ public partial class CalenderBill : UserControl
         // 页面实例被缓存，不在换页时复位，入场就只在本次进程第一次进入时看得到
         _entryEntrance.Reset();
         _firstLoadHandled = false;
+        _yearEntrancePlayed = false;
+        _emptyHintShown = false;
     }
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -128,11 +156,7 @@ public partial class CalenderBill : UserControl
             // 换粒度：主体重新落定，并给卡片一次入场
             case nameof(CalenderBillViewModel.Mode):
                 Settle();
-                if (Vm?.IsYearMode == true && !_yearEntrancePlayed)
-                {
-                    _yearEntrancePlayed = true;
-                    Dispatcher.BeginInvoke(new Action(AnimateCardsIn), DispatcherPriority.Loaded);
-                }
+                TryPlayYearEntrance();
                 break;
 
             // 翻页 / 首屏到货：首屏那一批交给卡片自己的入场，不走容器落定
