@@ -46,6 +46,13 @@ public partial class Statistics : UserControl
     /// <summary>排行条展开的实际播放条数，同上</summary>
     internal int RankBarsPlayCount { get; private set; }
 
+    /// <summary>
+    /// 排行条动画**被启动**的次数。
+    /// 与 <see cref="RankBarsPlayCount"/> 分开：那个数的是完成回调，只有在动画真的推进时才会涨；
+    /// 宿主里 LAE 时钟不推进，用它判断"有没有重播"会永远看不到变化。
+    /// </summary>
+    internal int RankBarsRunCount { get; private set; }
+
     /// <summary>趋势柱展开的实际播放条数，同上</summary>
     internal int TrendBarsPlayCount { get; private set; }
 
@@ -145,7 +152,12 @@ public partial class Statistics : UserControl
                 Dispatcher.BeginInvoke(new Action(Reveal), DispatcherPriority.Render);
                 break;
 
-
+            // 展开全部 / 收起：VisibleRankRows 换了一份列表，ItemsControl 会把行容器**全部重建**，
+            // RankBar 的宽度因此被重置回模板里的 Width="0"。不重播的话条子宽度一直是 0 ——
+            // 前景条没宽度、背景条也没宽度，看起来就是"点完之后颜色没了"。
+            case nameof(StatisticsViewModel.IsRankExpanded):
+                Dispatcher.BeginInvoke(new Action(AnimateRankBars), DispatcherPriority.Loaded);
+                break;
         }
     }
 
@@ -157,6 +169,7 @@ public partial class Statistics : UserControl
     private void AnimateRankBars()
     {
         RankBarsPlayCount = 0;
+        RankBarsRunCount++;
 
         double available = RankList.ActualWidth;
         if (available <= 0) return;
@@ -225,6 +238,35 @@ public partial class Statistics : UserControl
 
 
     // ---- 自动化验证入口（仅供 tools/UiSmokeTest 使用，internal + InternalsVisibleTo）----
+
+    /// <summary>
+    /// 让排行条直接落到终值，不播动画。
+    /// 宿主里 LAE 时钟不推进，条子在 delay 期间量到的宽度必然是 0；
+    /// 要断言"容器重建后几何还算得对"就得先把终值写进去。
+    /// </summary>
+    internal void SettleRankBarsForTest()
+    {
+        var bars = Descendants<Border>(RankList, "RankBar").ToList();
+        var rows = Vm?.VisibleRankRows ?? [];
+
+        for (int i = 0; i < bars.Count && i < rows.Count; i++)
+            bars[i].Width = Math.Max(MinBarWidth, rows[i].BarFraction * RankList.ActualWidth);
+    }
+
+    /// <summary>
+    /// 排行条前景条的实际宽度，按显示顺序。
+    /// 展开/收起会重建容器并把宽度重置为 0，这个量用来断言"重播补回来了"。
+    /// </summary>
+    internal IReadOnlyList<double> RankBarWidthsForTest
+        => [.. Descendants<Border>(RankList, "RankBar").Select(b => b.Width)];
+
+    /// <summary>背景条（铺满整行、Opacity 0.16 的那条）的实际宽度</summary>
+    internal IReadOnlyList<double> RankBarTrackWidthsForTest
+        => [.. Descendants<Border>(RankList, "RankBarTrack").Select(b => b.ActualWidth)];
+
+    /// <summary>排行的行数</summary>
+    internal int RankRowCountForTest => Descendants<Button>(RankList, "")
+        .Count(b => b.DataContext is CategoryRankRow);
 
     /// <summary>取排行的第一行按钮，供测试驱动下钻。</summary>
     internal Button? FindRankRowForTest()

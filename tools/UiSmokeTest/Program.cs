@@ -120,6 +120,7 @@ internal static class Program
             failures += Check("26. 每次进页面都重播入场动画", TestEntranceReplaysOnEveryEntry);
             failures += Check("27. 分类明细从真实入口走通", TestCategoryDetailEndToEnd);
             failures += Check("28. 液态玻璃的背部模糊接对了", TestBackdropBlur);
+            failures += Check("29. 三个入口都能看分类明细", TestCategoryEntryPoints);
         });
 
         Console.WriteLine();
@@ -3729,6 +3730,237 @@ internal static class Program
         ResetBillsData();
     }
 
+    // ---- 29. 分类明细的三个入口 ----
+
+    /// <summary>
+    /// 分类明细有三个入口：下拉框选、点排行行、点图例。三条必须等价。
+    /// <para>
+    /// 第 27 项只驱动了命令，绕开了"用户在选择器里选"这条路径 —— 而那条路径正是坏的：
+    /// <c>SelectedItem</c> 绑 OneWay 到一个 private setter 的属性，绑定回写被静默丢弃。
+    /// 所以这里**直接给 ComboBox.SelectedItem 赋值**，走真实的选择器路径。
+    /// </para>
+    /// <para>
+    /// 顺带守住"查看全部 / 收起"：那两下会重建所有行容器，把排行条的宽度重置回 0，
+    /// 没有重播的话条子颜色整片消失。
+    /// </para>
+    /// </summary>
+    private static void TestCategoryEntryPoints()
+    {
+        DrainSaves();
+        ResetBillsData();
+
+        var repo = App.Services.GetRequiredService<BillRepository>();
+        SeedStatisticsData(repo, DateOnly.FromDateTime(DateTime.Today));
+        SeedExtraCategories(repo, DateOnly.FromDateTime(DateTime.Today));
+
+        var window = new MainWindow
+        {
+            Width = WindowWidth,
+            Height = WindowHeight,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -10000,
+            Top = -10000
+        };
+
+        window.Show();
+        Pump();
+
+        window.NavigateForTest("Statistics");
+        Pump();
+        for (int i = 0; i < 10; i++) Pump();
+
+        var page = window.FindPageForTest("Statistics") as Statistics
+            ?? throw new Exception("找不到统计页");
+
+        if (page.DataContext is not StatisticsViewModel vm)
+            throw new Exception("统计页 DataContext 不对");
+
+        var picker = FindVisualByName<ComboBox>(page, "CategoryPicker")
+            ?? throw new Exception("找不到分类下拉框");
+
+        if (picker.Items.Count < 2)
+            throw new Exception($"下拉框只有 {picker.Items.Count} 个分类，测不了");
+
+        // ---- 入口 1：从下拉框选（真实选择器路径）----
+        var wanted = (string)picker.Items[1];
+
+        // 给 SelectedItem 赋值就等于用户在选择器里点了一下：绑定要能把它写回 ViewModel
+        picker.SelectedItem = wanted;
+        Pump();
+        page.UpdateLayout();
+
+        Report($"[1] 下拉框选 '{wanted}'：SelectedCategory={vm.SelectedCategory ?? "(null)"}，明细 {vm.CategoryEntries.Count} 条");
+        Report($"    下拉框自身 SelectedItem={picker.SelectedItem as string ?? "(null)"}");
+
+        if (vm.SelectedCategory != wanted)
+            throw new Exception(
+                $"[1] 从下拉框选没有生效：SelectedCategory={vm.SelectedCategory ?? "(null)"}，应为 {wanted}。" +
+                "多半是 SelectedItem 绑定写不回去（OneWay 或 setter 不可写）");
+
+        if (vm.CategoryEntries.Count == 0)
+            throw new Exception($"[1] 从下拉框选中 '{wanted}' 之后明细是空的");
+
+        // 明细要真的画出来，不只是数据层对
+        var texts = new List<TextBlock>();
+        CollectVisuals(page, texts);
+
+        var wantedTexts = vm.CategoryEntries.Select(e => e.Description).ToList();
+        int shown = wantedTexts.Count(d => texts.Any(x => x.Text == d));
+
+        Report($"[1] 画到界面：{shown}/{wantedTexts.Count} 条");
+
+        if (shown != wantedTexts.Count)
+            throw new Exception($"[1] 从下拉框选的明细没有全部画出来：{shown}/{wantedTexts.Count}");
+
+        // 清掉，回到未选状态
+        vm.ClearCategoryCommand.Execute(null);
+        Pump();
+        page.UpdateLayout();
+
+        if (vm.CategoryEntries.Count != 0)
+            throw new Exception("[1] 清除后明细还在");
+
+        // ---- 入口 2：点排行行 ----
+        var rowButton = page.FindRankRowForTest()
+            ?? throw new Exception("[2] 找不到排行行");
+
+        rowButton.Command.Execute(rowButton.CommandParameter);
+        Pump();
+        page.UpdateLayout();
+
+        Report($"[2] 点排行行：{vm.SelectedCategory}，明细 {vm.CategoryEntries.Count} 条");
+
+        if (vm.CategoryEntries.Count == 0)
+            throw new Exception("[2] 点排行行之后明细是空的");
+
+        // 下拉框要跟着同步（同一个属性，两个方向都得一致）
+        if (picker.SelectedItem as string != vm.SelectedCategory)
+            throw new Exception(
+                $"[2] 点排行行后下拉框没同步：选择器={picker.SelectedItem as string ?? "(null)"}，ViewModel={vm.SelectedCategory}");
+
+        vm.ClearCategoryCommand.Execute(null);
+        Pump();
+
+        // ---- 入口 3：点图例 ----
+        // 图例是圆环下面那组 LegendItem 按钮，没有 x:Name，按样式找
+        var allButtons = new List<Button>();
+        CollectVisuals(page, allButtons);
+
+        var legendButton = allButtons.FirstOrDefault(b =>
+            b.DataContext is DonutSegment && b.CommandParameter is string);
+
+        if (legendButton is not null)
+        {
+            legendButton.Command.Execute(legendButton.CommandParameter);
+            Pump();
+            page.UpdateLayout();
+
+            Report($"[3] 点图例：{vm.SelectedCategory}，明细 {vm.CategoryEntries.Count} 条");
+
+            if (vm.CategoryEntries.Count == 0)
+                throw new Exception("[3] 点图例之后明细是空的");
+
+            vm.ClearCategoryCommand.Execute(null);
+            Pump();
+        }
+        else
+        {
+            Report("[3] 图例没有可点的行，跳过");
+        }
+
+        // ---- 查看全部 / 收起：排行条不能因此消失 ----
+        if (!vm.HasMoreRanks)
+            throw new Exception("[4] 造的数据不足以出现'查看全部'，测试前提不成立");
+
+        // 宿主里 LAE 时钟不推进，条子停在 delay 期间、宽度必然是 0，量不到几何。
+        // 所以拆成两件各自可测的事：
+        //   (a) 每次展开/收起之后，排行条动画**被重新启动**（用调用次数，不用完成回调数）
+        //   (b) 容器重建后几何仍算得对（落终值再量）
+        int collapsedRows = page.RankRowCountForTest;
+        int runsBeforeExpand = page.RankBarsRunCount;
+
+        page.SettleRankBarsForTest();
+        page.UpdateLayout();
+
+        var collapsedWidths = page.RankBarWidthsForTest;
+        Report($"[4] 收起态：{collapsedRows} 行，条宽 [{string.Join(", ", collapsedWidths.Select(w => w.ToString("0.#")))}]");
+
+        if (collapsedWidths.Count == 0 || collapsedWidths.All(w => w <= 0))
+            throw new Exception("[4] 落终值后收起态的排行条宽度仍是 0，几何算错了");
+
+        vm.ShowAllCategoriesCommand.Execute(null);
+        Pump();
+        for (int i = 0; i < 10; i++) Pump();
+        page.UpdateLayout();
+
+        int expandedRows = page.RankRowCountForTest;
+
+        Report($"[5] 查看全部：{collapsedRows} -> {expandedRows} 行，" +
+               $"排行条动画启动次数 {runsBeforeExpand} -> {page.RankBarsRunCount}");
+
+        if (expandedRows <= collapsedRows)
+            throw new Exception($"[5] 查看全部之后行数没增加：{collapsedRows} -> {expandedRows}");
+
+        // 这是本轮的真 bug：容器重建把 RankBar 的宽度重置回模板里的 0，不重播就整片没颜色
+        if (page.RankBarsRunCount <= runsBeforeExpand)
+            throw new Exception(
+                "[5] 查看全部之后排行条动画没有重新启动 —— 容器重建把宽度重置回 0 了，" +
+                "没有重播的话前景条宽度一直是 0，看起来就是颜色没了");
+
+        page.SettleRankBarsForTest();
+        page.UpdateLayout();
+
+        var expandedWidths = page.RankBarWidthsForTest;
+        Report($"[5] 落终值后条宽 [{string.Join(", ", expandedWidths.Select(w => w.ToString("0.#")))}]");
+
+        if (expandedWidths.Count != expandedRows)
+            throw new Exception($"[5] 落了 {expandedWidths.Count} 条，但有 {expandedRows} 行");
+
+        if (expandedWidths.All(w => w <= 0))
+            throw new Exception("[5] 展开后所有条宽都是 0，几何算错了");
+
+        // 背景条是"整行那层淡色"，它必须铺满才有底色
+        var tracks = page.RankBarTrackWidthsForTest;
+        Report($"[5] 背景条宽度 {tracks.Count} 条，示例 [{string.Join(", ", tracks.Take(3).Select(w => w.ToString("0.#")))}]");
+
+        if (tracks.Count != expandedRows)
+            throw new Exception($"[5] 背景条 {tracks.Count} 条，应与 {expandedRows} 行一一对应");
+
+        if (tracks.Any(w => w <= 0))
+            throw new Exception("[5] 有背景条宽度是 0，那一行连淡色底都没有");
+
+        int runsBeforeCollapse = page.RankBarsRunCount;
+
+        vm.ShowTopCategoriesCommand.Execute(null);
+        Pump();
+        for (int i = 0; i < 10; i++) Pump();
+        page.UpdateLayout();
+
+        Report($"[6] 收起：{expandedRows} -> {page.RankRowCountForTest} 行，" +
+               $"排行条动画启动次数 {runsBeforeCollapse} -> {page.RankBarsRunCount}");
+
+        if (page.RankRowCountForTest != collapsedRows)
+            throw new Exception($"[6] 收起之后行数不对：{page.RankRowCountForTest}，应为 {collapsedRows}");
+
+        if (page.RankBarsRunCount <= runsBeforeCollapse)
+            throw new Exception("[6] 收起之后排行条动画没有重新启动，颜色又没了");
+
+        page.SettleRankBarsForTest();
+        page.UpdateLayout();
+
+        var backWidths = page.RankBarWidthsForTest;
+        Report($"[6] 落终值后条宽 [{string.Join(", ", backWidths.Select(w => w.ToString("0.#")))}]");
+
+        if (backWidths.Count != collapsedRows || backWidths.All(w => w <= 0))
+            throw new Exception($"[6] 收起后条数 {backWidths.Count}（应为 {collapsedRows}）或宽度不对");
+
+        window.Close();
+        Pump();
+
+        DrainSaves();
+        ResetBillsData();
+    }
+
     // ---- 28. 液态玻璃的背部模糊 ----
 
     /// <summary>
@@ -4536,6 +4768,29 @@ internal static class Program
     /// 压到今天，本月内的多笔记录可能落到同一天。写死数字在靠月初运行时会对不上，
     /// 而那种失败看起来像功能坏了，实际只是测试的假设不成立。
     /// </remarks>
+    /// <summary>
+    /// 在标准种子上再补几个分类，让分类数超过 DefaultRankRows，"查看全部"才会出现。
+    /// 单独一个方法而不是改 SeedStatisticsData：那一份返回的期望值被别的项断言着，
+    /// 往里面加条目会连带改掉那些数字。
+    /// </summary>
+    private static void SeedExtraCategories(BillRepository repo, DateOnly today)
+    {
+        var month = new DateOnly(today.Year, today.Month, 1);
+
+        // 6 个新分类 + 原有的餐饮、交通、工资（工资是收入，不进支出排行）
+        string[] extras = ["购物", "娱乐", "房租", "水电", "医疗", "学习"];
+        var entries = new List<PaperCoin.Core.Models.BillEntry>();
+
+        for (int i = 0; i < extras.Length; i++)
+        {
+            int day = 3 + i * 3;
+            entries.Add(Entry(SafeDay(month, day, today), $"{extras[i]}支出", -(60m + i * 25m), extras[i]));
+        }
+
+        WaitFor(entries.GroupBy(e => e.Date).Select(g => repo.SaveAsync(g.ToList())));
+        DrainSaves();
+    }
+
     private static StatisticsExpectations SeedStatisticsData(BillRepository repo, DateOnly today)
     {
         var thisMonth = new DateOnly(today.Year, today.Month, 1);

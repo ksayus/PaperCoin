@@ -235,13 +235,18 @@ public partial class StatisticsViewModel : ObservableObject
     /// 分类明细看的是"这个分类**一共有多少笔**"。前者跟着范围走，后者刻意不受范围限制 ——
     /// 想核对某个分类的完整流水时，按范围过滤反而碍事。
     /// </para>
+    /// <para>
+    /// setter 必须是 public：下拉框是直接绑这个属性的，只给 private setter 的话
+    /// 用户在选择器里选会被绑定**静默丢弃**（OneWay 且不可写），表现是"选了没反应"。
+    /// 点排行行与点图例走的是 <see cref="ShowCategoryCommand"/>，同一个 setter，三条入口等价。
+    /// </para>
     /// </summary>
     private string? _selectedCategory;
 
     public string? SelectedCategory
     {
         get => _selectedCategory;
-        private set
+        set
         {
             if (!SetProperty(ref _selectedCategory, value)) return;
 

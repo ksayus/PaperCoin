@@ -82,6 +82,23 @@ $cases = @(
     },
 
     @{
+        Name = '下拉框绑回 OneWay（选了没反应）'
+        File = 'PaperCoin\Views\Statistics.xaml'
+        From = 'SelectedItem="{Binding SelectedCategory, Mode=TwoWay}"'
+        To   = 'SelectedItem="{Binding SelectedCategory, Mode=OneWay}"'
+        Test = '29.'
+    },
+    @{
+        Name = '展开/收起后不重播排行条（颜色没了）'
+        File = 'PaperCoin\Views\Statistics.xaml.cs'
+        From = '            case nameof(StatisticsViewModel.IsRankExpanded):
+                Dispatcher.BeginInvoke(new Action(AnimateRankBars), DispatcherPriority.Loaded);
+                break;'
+        To   = '            case nameof(StatisticsViewModel.IsRankExpanded):
+                break;'
+        Test = '29.'
+    },
+    @{
         Name = '下拉框选中项文本不给前景色'
         File = 'PaperCoin\Themes\Controls.xaml'
         From = '                                              TextElement.Foreground="{DynamicResource ColorTextTitle}"/>'
