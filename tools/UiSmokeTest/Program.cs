@@ -3131,6 +3131,80 @@ internal static class Program
             throw new Exception(
                 $"安装项目的 ProductVersion 是 {installerVersion}，自有程序集是 {expected}。" +
                 "发布时要和 Directory.Build.props 的 <Version> 一起改");
+
+        // ProductCode 不能与本机已安装的**不同版本**撞车。
+        // 撞了的表现是"装不上"：Windows Installer 认定 ProductCode 相同就是同一个产品，
+        // 而文件版本又相等（同一个版本号），覆盖也会被跳过 —— 于是双击安装毫无反应。
+        // 这个错在 1.3.5 上真发生过：重建同一个版本号时沿用了旧的 ProductCode。
+        var productMatch = System.Text.RegularExpressions.Regex.Match(
+            File.ReadAllText(vdproj), "\"ProductCode\"\\s*=\\s*\"8:(\\{[0-9A-Fa-f-]+\\})\"");
+
+        if (!productMatch.Success)
+        {
+            Report("vdproj 里读不到 ProductCode，跳过与本机已安装版本比对");
+            return;
+        }
+
+        var productCode = productMatch.Groups[1].Value.ToUpperInvariant();
+        Report($"安装项目 ProductCode = {productCode}");
+
+        foreach (var installed in FindInstalledPaperCoinProducts())
+        {
+            if (!string.Equals(installed.ProductCode, productCode, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (installed.Version == expected)
+            {
+                Report($"  本机已装同版本 {installed.Version}，ProductCode 相同（正常：同一个产品）");
+                continue;
+            }
+
+            throw new Exception(
+                $"ProductCode {productCode} 已经被本机安装的 {installed.Version} 占用，" +
+                $"而这次要出的是 {expected}。Windows Installer 会认定\"同一个产品已安装\"，" +
+                "文件版本又相等，于是装不上。发布新版本时必须换一个新的 ProductCode");
+        }
+
+        Report("  ProductCode 未被本机的其它版本占用");
+    }
+
+    /// <summary>本机已安装的 PaperCoin 产品（从卸载注册表读）</summary>
+    private static List<(string ProductCode, string Version)> FindInstalledPaperCoinProducts()
+    {
+        var result = new List<(string, string)>();
+
+        string[] roots =
+        [
+            @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+        ];
+
+        foreach (var hive in new[] { RegistryHive.LocalMachine, RegistryHive.CurrentUser })
+        {
+            foreach (var sub in roots)
+            {
+                try
+                {
+                    using var baseKey = RegistryKey.OpenBaseKey(hive, RegistryView.Registry64);
+                    using var root = baseKey.OpenSubKey(sub);
+                    if (root is null) continue;
+
+                    foreach (var name in root.GetSubKeyNames())
+                    {
+                        using var entry = root.OpenSubKey(name);
+                        if (entry?.GetValue("DisplayName") as string != "PaperCoin") continue;
+                        if (name.StartsWith('{') && name.EndsWith('}'))
+                            result.Add((name, entry.GetValue("DisplayVersion") as string ?? ""));
+                    }
+                }
+                catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException)
+                {
+                    // 读不到某个 hive 不算失败：能读到的部分已经足够做这项检查
+                }
+            }
+        }
+
+        return result;
     }
 
     // ---- 17. 安装位置记录 ----

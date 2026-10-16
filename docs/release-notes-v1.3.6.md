@@ -1,4 +1,4 @@
-# PaperCoin v1.3.5
+# PaperCoin v1.3.6
 
 ## 更新功能
 

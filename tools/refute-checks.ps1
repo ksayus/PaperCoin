@@ -82,6 +82,15 @@ $cases = @(
     },
 
     @{
+        # 注意：这条依赖"本机装着一个 ProductCode 与当前不同的旧版本"，换机器可能跑不成。
+        # 这里用 1.2.2 的产品码（本机长期装着），它不是当前要出的版本。
+        Name = 'ProductCode 撞上已安装的其它版本（装不上）'
+        File = 'PaperCoin.Setup\PaperCoin.Setup.vdproj'
+        From = '"ProductCode" = "8:{C303F0BC-39D5-412F-AAB2-776CC261C0A0}"'
+        To   = '"ProductCode" = "8:{33F504D6-3AEE-4244-A77D-3F5E89CC44D2}"'
+        Test = '16.'
+    },
+    @{
         Name = '日历页删除不落盘（界面删了磁盘还在）'
         File = 'PaperCoin\ViewModels\CalenderBillViewModel.cs'
         From = '        bool ok = await _repository.DeleteEntryAsync(entry.Date, entry.Id);'
