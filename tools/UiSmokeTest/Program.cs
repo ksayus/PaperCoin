@@ -1,4 +1,5 @@
 using System.IO;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Windows.Input;
 using System.Text.RegularExpressions;
@@ -40,6 +41,12 @@ internal static class Program
     private const string ColorProbeArgument = "--color-probe";
 
     /// <summary>
+    /// 对真实 GitHub 发布查一次。默认不跑：联网断言会因为网络抖动假失败，
+    /// 而"检查更新"这件事的正确性主要靠假响应验（见第 32/33 项）。
+    /// </summary>
+    private const string UpdateLiveArgument = "--update-live";
+
+    /// <summary>
     /// 探针样本。刻意包含中文、大小写、带空格与空值：
     /// 哈希实现换一种写法时，只要其中一项变了，两次进程的输出就会不同。
     /// </summary>
@@ -53,6 +60,28 @@ internal static class Program
         // 第 20 项要靠它比较两次独立进程的输出 —— 颜色映射如果用了
         // string.GetHashCode，进程内两次调用一致、跨进程却不一样，
         // 同一个进程里无论怎么断言都发现不了。
+        if (Environment.GetCommandLineArgs().Contains(UpdateLiveArgument))
+        {
+            try
+            {
+                Version? pretend = null;
+                var args = Environment.GetCommandLineArgs();
+                int at = Array.IndexOf(args, "--update-as");
+
+                if (at >= 0 && at + 1 < args.Length && Version.TryParse(args[at + 1], out var parsed))
+                    pretend = parsed;
+
+                TestUpdaterLive(pretend);
+                Console.WriteLine("真实查询通过");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"真实查询失败: {ex.Message}");
+                return 1;
+            }
+        }
+
         if (Environment.GetCommandLineArgs().Contains(ColorProbeArgument))
         {
             foreach (var name in ColorProbeCategories)
@@ -74,6 +103,15 @@ internal static class Program
             Console.WriteLine("并发跑只会得到互相污染的结果，请等它结束，或用 --screenshots 之外的模式串行执行。");
             return 2;
         }
+
+        // 输出统一成 UTF-8。默认会跟随系统代码页（这台机器上是 936），而读日志的一方
+        // （tools/refute-checks.ps1、以及我自己在终端里看）都按 UTF-8 解 ——
+        // 编码不一致时"== 全部通过 ==" 会被解成乱码，整套反证会误判成"基线没有全绿"。
+        Console.OutputEncoding = System.Text.Encoding.UTF8;
+
+        // 关掉窗口启动时的联网查更新：测试会反复建窗口，每次都真去打网络会让整套测试超时，
+        // 而且结果会随网络抖动而变。更新检查本身由第 32/33 项用假响应验。
+        Environment.SetEnvironmentVariable("PAPERCOIN_NO_UPDATE_CHECK", "1");
 
         var app = new Application
         {
@@ -138,10 +176,37 @@ internal static class Program
             failures += Check("29. 三个入口都能看分类明细", TestCategoryEntryPoints);
             failures += Check("30. 每个 XAML 里同一名字范围不重名", TestNoDuplicateNamesInScope);
             failures += Check("31. 日历页能改和删账单", TestCalendarEditAndDelete);
+            failures += Check("32. 自动更新：解析与版本比较", TestUpdaterParsing);
+            failures += Check("33. 自动更新：界面接线", TestUpdaterUi);
         });
 
         Console.WriteLine();
         Console.WriteLine(failures == 0 ? "== 全部通过 ==" : $"== {failures} 项失败 ==");
+
+        // 必须自己收干净：Application 建的时候设了 ShutdownMode.OnExplicitShutdown
+        // （侧边栏测试要 Show/Close 真实窗口，默认模式会提前把宿主带停），于是 Main 返回后
+        // 进程**不会自己退出** —— 留着的 UiSmokeTest.exe 会占住 dll，下一次构建报 MSB3027。
+        // 只调 Shutdown() 也不够：测试建的窗口还开着，逐个关掉才会放掉它们持有的资源。
+        foreach (Window window in app.Windows.Cast<Window>().ToList())
+        {
+            try
+            {
+                window.Close();
+            }
+            catch (Exception)
+            {
+                // 收尾失败不该改变测试结论
+            }
+        }
+
+        app.Shutdown();
+
+        Console.Out.Flush();
+
+        // 前面若有非后台线程或窗口没放干净，进程仍可能挂着。这里直接了结，
+        // 免得给后面每一次构建都留一个"文件被锁"。退出码先算好。
+        Environment.Exit(failures);
+
         return failures;
     }
 
@@ -1551,7 +1616,7 @@ internal static class Program
     {
         var config = new ConfigService();
         var theme = new ThemeManager(config);
-        var vm = new SettingsViewModel(config, theme);
+        var vm = new SettingsViewModel(config, theme, new AppUpdater());
         var view = new Settings { DataContext = vm };
         Pump();
         Layout(view);
@@ -2155,6 +2220,11 @@ internal static class Program
         services.AddSingleton(config);
         services.AddSingleton(theme);
         services.AddSingleton<BillRepository>();
+
+        // 与 App.OnStartup 的注册保持一致。更新检查在测试里不会真的发请求：
+        // 第 32/33 项用的是自己构造的 AppUpdater + 假处理器。
+        services.AddSingleton(_ => new AppUpdater());
+
         services.AddTransient<TodayBillViewModel>();
         services.AddTransient<CalenderBillViewModel>();
         services.AddTransient<StatisticsViewModel>();
@@ -3837,6 +3907,374 @@ internal static class Program
         ResetBillsData();
     }
 
+    // ---- 32. 自动更新的解析 ----
+
+    /// <summary>
+    /// 更新检查的真相都在两个源的响应里。这里对着**真实的响应形状**断言：
+    /// GitHub 的资产地址在 <c>browser_download_url</c>，Gitee 在 <c>browser_download_url</c> 上但
+    /// tag 可能没有 v 前缀、也可能带后缀；还有一堆失败形态要各给各的话。
+    /// </summary>
+    private static void TestUpdaterParsing()
+    {
+        // ---- 版本解析 ----
+        foreach (var (tag, expected, why) in new (string, string, string)[]
+                 {
+                     ("v1.3.6", "1.3.6", "带 v 前缀"),
+                     ("1.3.6", "1.3.6", "不带前缀"),
+                     ("v1.3", "1.3.0", "不足三段要补零，否则 1.3 与 1.3.0 会被判成有新版"),
+                     ("v1.3.6-beta.1", "1.3.6", "预发布后缀要忽略"),
+                     ("v2.0.0+build7", "2.0.0", "构建元数据要忽略"),
+                     ("V1.2.2", "1.2.2", "大写 V")
+                 })
+        {
+            if (!AppUpdater.TryParseVersion(tag, out var v))
+                throw new Exception($"「{tag}」应当能解析成版本号（{why}）");
+
+            if (v.ToString() != expected)
+                throw new Exception($"「{tag}」解析成了 {v}，应为 {expected}（{why}）");
+        }
+
+        foreach (var bad in new[] { "release", "v", "", "vNext", "1.x" })
+        {
+            if (AppUpdater.TryParseVersion(bad, out _))
+                throw new Exception($"「{bad}」不该被当成版本号");
+        }
+
+        Report("版本解析：6 个合法形态 + 5 个非法形态都对");
+
+        // ---- GitHub 响应 ----
+        const string githubJson = """
+        {
+          "tag_name": "v1.3.6",
+          "name": "PaperCoin v1.3.6",
+          "html_url": "https://github.com/ksayus/PaperCoin/releases/tag/v1.3.6",
+          "body": "## 更新功能\n- 统计可视化",
+          "assets": [
+            { "name": "PaperCoin.msi", "browser_download_url": "https://example.test/PaperCoin.msi" },
+            { "name": "uninstall.exe", "browser_download_url": "https://example.test/uninstall.exe" },
+            { "name": "setup.exe", "browser_download_url": "https://example.test/setup.exe" }
+          ]
+        }
+        """;
+
+        if (!AppUpdater.TryParse(githubJson, UpdateSource.Github, out var gh, out var why1))
+            throw new Exception($"GitHub 响应应当能解析：{why1}");
+
+        Report($"GitHub：版本={gh.Version} tag={gh.TagName} 安装包={gh.InstallerName}");
+
+        if (gh.Version.ToString() != "1.3.6") throw new Exception($"版本解析错：{gh.Version}");
+        if (gh.PageUrl != "https://github.com/ksayus/PaperCoin/releases/tag/v1.3.6")
+            throw new Exception($"发布页地址取错：{gh.PageUrl}");
+
+        // 有 setup.exe 时要优先选它：它自带引导界面，双击即用，MSI 还得交给 msiexec
+        if (gh.InstallerName != "setup.exe")
+            throw new Exception($"应当优先选 setup.exe，实际选了 {gh.InstallerName}");
+        if (gh.InstallerUrl != "https://example.test/setup.exe")
+            throw new Exception($"安装包地址取错：{gh.InstallerUrl}");
+        if (gh.Notes.Length == 0) throw new Exception("没取到发布说明");
+
+        // ---- 只有 MSI 时 ----
+        const string msiOnlyJson = """
+        {
+          "tag_name": "v1.3.6",
+          "html_url": "https://example.test/tag",
+          "body": "",
+          "assets": [
+            { "name": "checksums.txt", "browser_download_url": "https://example.test/c.txt" },
+            { "name": "PaperCoin.msi", "browser_download_url": "https://example.test/PaperCoin.msi" }
+          ]
+        }
+        """;
+
+        if (!AppUpdater.TryParse(msiOnlyJson, UpdateSource.Github, out var msi, out var why2))
+            throw new Exception($"只有 MSI 时应当能解析：{why2}");
+
+        if (msi.InstallerName != "PaperCoin.msi")
+            throw new Exception($"应当退回 MSI，实际 {msi.InstallerName}");
+
+        Report($"只有 MSI 时：选了 {msi.InstallerName}");
+
+        // ---- 没有任何安装包 ----
+        const string noAssetJson = """
+        { "tag_name": "v9.0.0", "html_url": "https://example.test/tag", "body": "x", "assets": [] }
+        """;
+
+        if (!AppUpdater.TryParse(noAssetJson, UpdateSource.Github, out var none, out _))
+            throw new Exception("没有资产时也应当解析出发布，只是没有可安装文件");
+
+        if (none.InstallerUrl is not null)
+            throw new Exception("没有资产时不该给出安装包地址");
+
+        Report("没有安装包时：解析出发布但不给安装包地址（界面会引导去发布页）");
+
+        // ---- Gitee 响应（字段形状与 GitHub 不同：没有 name，资产地址字段名一致） ----
+        const string giteeJson = """
+        {
+          "tag_name": "1.3.6",
+          "html_url": "https://gitee.com/ksayus/PaperCoin/releases/1.3.6",
+          "body": "说明",
+          "assets": [
+            { "name": "PaperCoin.msi", "browser_download_url": "https://gitee.test/PaperCoin.msi" }
+          ]
+        }
+        """;
+
+        if (!AppUpdater.TryParse(giteeJson, UpdateSource.Gitee, out var gt, out var why3))
+            throw new Exception($"Gitee 响应应当能解析：{why3}");
+
+        Report($"Gitee：版本={gt.Version} 安装包={gt.InstallerName}");
+
+        if (gt.Version.ToString() != "1.3.6") throw new Exception($"Gitee 版本解析错：{gt.Version}");
+
+        // ---- 各种看不懂的响应 ----
+        foreach (var (json, label) in new[]
+                 {
+                     ("not json at all", "不是 JSON"),
+                     ("[]", "是数组不是对象"),
+                     ("""{"message":"Not Found"}""", "没有 tag_name"),
+                     ("""{"tag_name":"nightly"}""", "tag 不是版本号")
+                 })
+        {
+            if (AppUpdater.TryParse(json, UpdateSource.Github, out _, out var why))
+                throw new Exception($"{label} 的响应不该解析成功");
+
+            Report($"  {label}：{why}");
+
+            if (why.Length == 0) throw new Exception($"{label} 没给出原因");
+        }
+    }
+
+    // ---- 33. 自动更新的界面接线 ----
+
+    /// <summary>
+    /// 更新检查要落到界面上：状态文案、按钮可用性、下载进度、发布说明。
+    /// <para>
+    /// 用假 <see cref="HttpMessageHandler"/> 喂响应，不联网 —— 联网的断言会因为网络抖动而假失败。
+    /// 联网这条路径另有一项 <c>--update-live</c> 单独验（见 <see cref="TestUpdaterLive"/>）。
+    /// </para>
+    /// </summary>
+    private static void TestUpdaterUi()
+    {
+        var json = """
+        {
+          "tag_name": "v99.0.0",
+          "name": "v99.0.0",
+          "html_url": "https://example.test/tag",
+          "body": "第一行\n第二行\n第三行",
+          "assets": [ { "name": "setup.exe", "browser_download_url": "https://example.test/setup.exe" } ]
+        }
+        """;
+
+        var handler = new FakeHttpHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
+        });
+
+        var updater = new AppUpdater(handler);
+        var config = new ConfigService();
+        var vm = new SettingsViewModel(config, new ThemeManager(config), updater);
+
+        Report($"[1] 初始：HasUpdate={vm.HasUpdate} CanInstall={vm.CanInstall} 状态='{vm.UpdateStatusText}'");
+
+        if (vm.HasUpdate) throw new Exception("[1] 还没查就报告有更新");
+        if (vm.CanInstall) throw new Exception("[1] 还没查到更新就允许安装");
+
+        // ---- 查一次 ----
+        vm.CheckUpdateCommand.Execute(null);
+        for (int i = 0; i < 40; i++) Pump();
+
+        Report($"[2] 查完：HasUpdate={vm.HasUpdate} CanInstall={vm.CanInstall}");
+        Report($"[2] 标题='{vm.UpdateHeadline}'");
+        Report($"[2] 说明='{vm.ReleaseNotes.Replace("\n", " / ")}'");
+
+        if (!vm.HasUpdate) throw new Exception($"[2] 假响应里有 v99.0.0，应当报有更新（状态：{vm.UpdateStatusText}）");
+        if (!vm.CanInstall) throw new Exception("[2] 有新版且有 setup.exe，应当允许安装");
+        if (!vm.UpdateHeadline.Contains("99.0.0")) throw new Exception($"[2] 标题里没有新版本号：{vm.UpdateHeadline}");
+        if (!vm.HasReleaseNotes) throw new Exception("[2] 没有展示发布说明");
+        if (vm.MustDownloadManually) throw new Exception("[2] 有安装包却要求手动下载");
+
+        // ---- 同版本不该报有更新 ----
+        var sameJson = json.Replace("v99.0.0", "v" + PaperCoin.Core.Constants.AppVersion);
+
+        var sameHandler = new FakeHttpHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent(sameJson, System.Text.Encoding.UTF8, "application/json")
+        });
+
+        var sameUpdater = new AppUpdater(sameHandler);
+        var sameVm = new SettingsViewModel(config, new ThemeManager(config), sameUpdater);
+
+        sameVm.CheckUpdateCommand.Execute(null);
+        for (int i = 0; i < 40; i++) Pump();
+
+        Report($"[3] 同版本：HasUpdate={sameVm.HasUpdate} 状态='{sameVm.UpdateStatusText}'");
+
+        if (sameVm.HasUpdate)
+            throw new Exception($"[3] 当前版本与发布相同却报有更新（状态：{sameVm.UpdateStatusText}）");
+
+        // ---- 网络不通要说清原因，而不是静默 ----
+        var downHandler = new FakeHttpHandler(_ => throw new HttpRequestException("名字解析失败"));
+        var downUpdater = new AppUpdater(downHandler);
+        var downVm = new SettingsViewModel(config, new ThemeManager(config), downUpdater);
+
+        downVm.CheckUpdateCommand.Execute(null);
+        for (int i = 0; i < 40; i++) Pump();
+
+        Report($"[4] 网络不通：状态='{downVm.UpdateStatusText}'");
+
+        if (downVm.UpdateStatusText.Contains("正在检查"))
+            throw new Exception("[4] 查询失败后状态还停在「正在检查」，用户会一直等");
+
+        if (downVm.UpdateStatusText.Length == 0)
+            throw new Exception("[4] 查询失败却什么也没说");
+
+        if (downVm.HasUpdate) throw new Exception("[4] 查询失败却报告有更新");
+
+        // ---- 404（还没发布过任何版本）不该说成"检查失败" ----
+        var notFoundHandler = new FakeHttpHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+        {
+            Content = new StringContent("""{"message":"Not Found"}""")
+        });
+
+        var nfUpdater = new AppUpdater(notFoundHandler);
+        var nfVm = new SettingsViewModel(config, new ThemeManager(config), nfUpdater);
+
+        nfVm.CheckUpdateCommand.Execute(null);
+        for (int i = 0; i < 40; i++) Pump();
+
+        Report($"[5] 没有发布：状态='{nfVm.UpdateStatusText}'");
+
+        if (nfVm.HasUpdate) throw new Exception("[5] 没有发布却报告有更新");
+
+        // ---- 限流要给出可操作的说法 ----
+        var limitedHandler = new FakeHttpHandler(_ => new HttpResponseMessage(
+            (System.Net.HttpStatusCode)403));
+
+        var limUpdater = new AppUpdater(limitedHandler);
+        var limVm = new SettingsViewModel(config, new ThemeManager(config), limUpdater);
+
+        limVm.CheckUpdateCommand.Execute(null);
+        for (int i = 0; i < 40; i++) Pump();
+
+        Report($"[6] 被限流：状态='{limVm.UpdateStatusText}'");
+
+        if (!limVm.UpdateStatusText.Contains("403"))
+            throw new Exception($"[6] 限流的说法里没有状态码：{limVm.UpdateStatusText}");
+
+        // ---- 响应看不懂时，界面上不能说成"已是最新" ----
+        // 解析层（第 32 项）已经验过它会失败，但真正伤人的是界面把失败说成"已是最新"：
+        // 用户会以为没有新版，也就不会去手动下载。
+        var garbageHandler = new FakeHttpHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent("<html>502 Bad Gateway</html>")
+        });
+
+        var garbageVm = new SettingsViewModel(
+            config, new ThemeManager(config), new AppUpdater(garbageHandler));
+
+        garbageVm.CheckUpdateCommand.Execute(null);
+        for (int i = 0; i < 40; i++) Pump();
+
+        Report($"[10] 响应看不懂：状态='{garbageVm.UpdateStatusText}'");
+
+        if (garbageVm.UpdateStatusText.Contains("已是最新"))
+            throw new Exception(
+                $"[10] 响应看不懂却告诉用户「已是最新」，他会以为没有新版：" +
+                $"'{garbageVm.UpdateStatusText}'");
+
+        if (garbageVm.UpdateStatusText.Trim().Length == 0)
+            throw new Exception("[10] 响应看不懂却什么也没说");
+
+        // ---- 启动时查到的结果要能被后建的设置页看到 ----
+        // SettingsViewModel 是 transient 的：启动时那次查询落在单例的 AppUpdater 上，
+        // 用户点进设置页时是另一个新实例，必须自己接手过来。
+        // 用 RoundTrip 而不是 GetAwaiter().GetResult()：这个套件跑在 UI 线程上，
+        // 阻塞等待会让 await 的续体回不来（下载那条路径里的 Progress 回调尤其明显，
+        // 它要 Post 回 UI 线程，而 UI 线程正卡着）—— 直接死锁。
+        WaitFor(updater.CheckAndRememberAsync(UpdateSource.Github, new Version(1, 0, 0)));
+
+        var laterVm = new SettingsViewModel(config, new ThemeManager(config), updater);
+
+        Report($"[7] 启动查过之后新建的设置页：HasUpdate={laterVm.HasUpdate} 标题='{laterVm.UpdateHeadline}'");
+
+        if (!laterVm.HasUpdate)
+            throw new Exception(
+                "[7] 启动时后台查到的更新没有传到新建的设置页上 —— " +
+                "查询结果存在 transient 的 ViewModel 里就会这样，用户永远看不到");
+
+        // ---- 下载把文件落盘 ----
+        var payload = new byte[4096];
+        Random.Shared.NextBytes(payload);
+
+        var downloadHandler = new FakeHttpHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(payload)
+        });
+
+        var dlUpdater = new AppUpdater(downloadHandler);
+        var target = Path.Combine(Path.GetTempPath(), $"papercoin-dl-{Guid.NewGuid():N}.bin");
+
+        var failure = RoundTrip(dlUpdater.DownloadAsync("https://example.test/x.exe", target));
+
+        if (failure.Length > 0) throw new Exception($"[8] 下载失败：{failure}");
+
+        var written = File.ReadAllBytes(target);
+        File.Delete(target);
+
+        Report($"[8] 下载：写盘 {written.Length} 字节，与源一致={written.SequenceEqual(payload)}");
+
+        if (!written.SequenceEqual(payload))
+            throw new Exception("[8] 下载下来的内容与源不一致");
+
+        // ---- 下载路径要落在临时目录，不能污染程序目录 ----
+        var path = AppUpdater.DownloadPathFor("setup.exe");
+        var temp = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
+
+        Report($"[9] 下载路径 = {path}");
+
+        if (!path.StartsWith(temp, StringComparison.OrdinalIgnoreCase))
+            throw new Exception($"[9] 下载路径不在临时目录里：{path}");
+
+        if (Path.GetFileName(path) != "setup.exe")
+            throw new Exception($"[9] 下载文件名不对：{Path.GetFileName(path)}");
+    }
+
+    /// <summary>
+    /// 对着**真实的** GitHub 发布查一次。默认不跑（要在 CI 里跑就会因为网络抖动假失败），
+    /// 用 <c>--update-live</c> 显式打开。
+    /// </summary>
+    private static void TestUpdaterLive(Version? asVersion = null)
+    {
+        // 允许假装自己是某个旧版本 —— 当前版本已经是最新时，"发现有新版"这条真实路径
+        // 否则永远走不到（而这正是自动更新最关键的那条路）。
+        var current = asVersion ?? Version.Parse(PaperCoin.Core.Constants.AppVersion);
+        var updater = new AppUpdater();
+
+        var check = RoundTrip(updater.CheckAsync(UpdateSource.Github, current));
+
+        Report($"真实查询：{check.Message}");
+        Report($"  失败={check.IsFailure}");
+
+        if (check.Release is { } release)
+        {
+            Report($"  版本={release.Version} tag={release.TagName}");
+            Report($"  安装包={release.InstallerName ?? "(无)"}");
+            Report($"  地址={release.InstallerUrl ?? "(无)"}");
+        }
+
+        if (check.IsFailure)
+            throw new Exception($"真实查询失败：{check.Message}");
+    }
+
+    /// <summary>按需给出响应的假处理器，用来把更新检查从网络里摘出来</summary>
+    private sealed class FakeHttpHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)
+        : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(respond(request));
+    }
+
     // ---- 31. 日历页的增删改 ----
 
     /// <summary>
@@ -4105,7 +4543,7 @@ internal static class Program
         // 任何"返回锚点"的实现都仍在范围内，断言区分不出对错。
         // 跳到两年多前，两种实现的结果就分开了：对的是 2024-01-01，错的是今天。
         var farMonth = DateOnly.FromDateTime(DateTime.Today).AddMonths(-20);
-        vm.GoToForTestAsync(farMonth).GetAwaiter().GetResult();
+        WaitFor(vm.GoToForTestAsync(farMonth));
         for (int i = 0; i < 20; i++) Pump();
         Layout(view);
 
@@ -4143,7 +4581,7 @@ internal static class Program
         for (int i = 0; i < 20; i++) Pump();
 
         DateOnly farYear = new(DateTime.Today.Year - 3, 6, 15);
-        vm.GoToForTestAsync(farYear).GetAwaiter().GetResult();
+        WaitFor(vm.GoToForTestAsync(farYear));
         for (int i = 0; i < 20; i++) Pump();
         Layout(view);
 
@@ -4219,7 +4657,10 @@ internal static class Program
 
         WaitUntil(() =>
         {
-            result = repo.LoadDayAsync(date).GetAwaiter().GetResult();
+            // 同上：不能在 UI 线程上阻塞等。这里由外层的 WaitUntil 驱动泵。
+            var t = repo.LoadDayAsync(date);
+            WaitFor(t);
+            result = t.Result;
             return true;
         });
 
@@ -5205,8 +5646,10 @@ internal static class Program
         var pickerTexts = new List<TextBlock>();
         CollectVisuals(picker, pickerTexts);
 
+
         var shownLabel = pickerTexts.FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Text))
             ?? throw new Exception("下拉框里没有任何文本，选中的分类名没画出来");
+
 
         var color = (shownLabel.Foreground as SolidColorBrush)?.Color ?? Colors.Black;
         Report($"下拉框文本 '{shownLabel.Text}' 颜色 = #{color.R:X2}{color.G:X2}{color.B:X2}");

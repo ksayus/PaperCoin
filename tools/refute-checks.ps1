@@ -82,11 +82,47 @@ $cases = @(
     },
 
     @{
+        Name = '版本比较不看段数补零（1.3 与 1.3.0 被判成有新版）'
+        File = 'PaperCoin.Service\AppUpdater.cs'
+        From = '        version = new Version(
+            Math.Max(parsed.Major, 0),
+            Math.Max(parsed.Minor, 0),
+            Math.Max(parsed.Build, 0));'
+        To   = '        version = parsed;'
+        Test = '32.'
+    },
+    @{
+        Name = '更新检查失败也说成"已是最新"'
+        File = 'PaperCoin.Service\AppUpdater.cs'
+        From = '        if (!TryParse(json, source, out var release, out var why))
+            return UpdateCheck.Failed(why);'
+        To   = '        if (!TryParse(json, source, out var release, out var why))
+            return UpdateCheck.Ok(new UpdateRelease(current, "", "", "", null, null), "已是最新版本");'
+        Test = '33.'
+    },
+    @{
+        Name = '查询结果存在 transient 的 ViewModel 里（设置页看不到）'
+        File = 'PaperCoin\ViewModels\SettingsViewModel.cs'
+        From = '        AdoptRememberedResult();'
+        To   = '        // 注入：不接手启动时那次查询的结果'
+        Test = '33.'
+    },
+    @{
+        Name = '下载优先选 MSI 而不是 setup.exe'
+        File = 'PaperCoin.Service\AppUpdater.cs'
+        From = '            if (name.Equals("setup.exe", StringComparison.OrdinalIgnoreCase))
+                return (url, name);'
+        To   = '            if (name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                return (url, name);'
+        Test = '32.'
+    },
+    @{
         # 注意：这条依赖"本机装着一个 ProductCode 与当前不同的旧版本"，换机器可能跑不成。
         # 这里用 1.2.2 的产品码（本机长期装着），它不是当前要出的版本。
         Name = 'ProductCode 撞上已安装的其它版本（装不上）'
         File = 'PaperCoin.Setup\PaperCoin.Setup.vdproj'
-        From = '"ProductCode" = "8:{C303F0BC-39D5-412F-AAB2-776CC261C0A0}"'
+        # From 要跟着 vdproj 里当前的 ProductCode 走（每次升版本都会换），To 用 1.2.2 的码（本机长期装着）。
+        From = '"ProductCode" = "8:{6094DD12-CFF1-4318-B841-6526B8E251D5}"'
         To   = '"ProductCode" = "8:{33F504D6-3AEE-4244-A77D-3F5E89CC44D2}"'
         Test = '16.'
     },
@@ -174,8 +210,40 @@ function Invoke-Smoke([string]$label) {
     return Get-Content $smokeLog -Encoding UTF8
 }
 
+# 注入残留的自愈。
+#
+# 反证靠"改文件 → 跑测试 → 还原"来做。若中途被打断（Ctrl+C、超时、被 kill），
+# 注入的错误版本会留在工作区里，后果是**看着像功能坏了** —— 实测踩过一次：
+# Controls.xaml 被留成删掉前景色的版本，第 24 项因此一直失败，
+# 而真正的原因只是上一轮没还原。
+#
+# 关键在于**只在上一轮确实被中断时**才还原：不能一看到文件是脏的就还原，
+# 否则会把开发者正在做的、尚未提交的改动一起清掉（这个也踩过）。
+# 用一个运行标记文件区分这两种"脏"。
+$injectedFiles = $cases | ForEach-Object { $_.File } | Select-Object -Unique
+$marker = Join-Path $env:TEMP 'papercoin-refute-running'
+
+if (Test-Path $marker) {
+    Write-Host '[自愈] 上一次反证没有正常收尾，先还原它注入过的文件'
+
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+
+    try {
+        foreach ($file in $injectedFiles) { git checkout -- $file 2>&1 | Out-Null }
+    }
+    finally {
+        $ErrorActionPreference = $previous
+        Remove-Item $marker -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Host '  已还原。'
+}
+
+Set-Content -Path $marker -Value $PID -Encoding ASCII
 Write-Host '=== 基线：当前实现必须全部通过 ==='
 $baseline = Invoke-Smoke 'baseline'
+Write-Host "  [诊断] 读到 $($baseline.Count) 行；'结果: OK' $((($baseline | Select-String '结果: OK').Count)) 项；含通过标记 $((($baseline | Select-String '== 全部通过 ==').Count))"
 if (-not ($baseline | Select-String '== 全部通过 ==')) {
     $baseline | Select-String '结果: 失败' -Context 0, 2 | ForEach-Object { $_.Line + ' ' + $_.Context.PostContext }
     throw '基线没有全绿，反证无从谈起'
@@ -246,6 +314,8 @@ foreach ($case in $cases) {
 }
 
 Write-Host ''
+Remove-Item (Join-Path $env:TEMP 'papercoin-refute-running') -Force -ErrorAction SilentlyContinue
+
 Write-Host '=== 还原后复跑 ==='
 dotnet build tools\UiSmokeTest\UiSmokeTest.csproj -m:1 -v:q --nologo 2>&1 | Select-String 'error' | Select-Object -First 5
 $final = Invoke-Smoke 'final'
@@ -255,6 +325,7 @@ if ($final | Select-String '== 全部通过 ==') {
     Write-Host '  ✘ 还原后没有全绿，工作区可能已损坏！'
     $failed += '还原后未全绿'
 }
+
 
 Write-Host ''
 if ($failed.Count -eq 0) {

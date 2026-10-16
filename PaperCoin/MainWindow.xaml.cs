@@ -5,7 +5,9 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using LAE;
 using Microsoft.Extensions.DependencyInjection;
+using PaperCoin.Core;
 using PaperCoin.Service;
+using PaperCoin.Services;
 using PaperCoin.ViewModels;
 using PaperCoin.Views;
 
@@ -80,8 +82,13 @@ public partial class MainWindow : Window
         };
     }
 
+    /// <summary>本次进程是否已经在后台查过更新。窗口可能被反复 Loaded，只查一次。</summary>
+    private static bool _updateChecked;
+
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
+        CheckForUpdatesOnStartup();
+
         // 背板要在句柄就绪后设，而且窗口尺寸变化后 DWM 偶尔会把它丢掉，所以跟着布局一起校正
         ApplyBackdrop();
         LayoutUpdated += (_, _) => ApplyBackdrop();
@@ -89,6 +96,43 @@ public partial class MainWindow : Window
         // 推迟到 Render 优先级：此时布局未完成，NavPanel.ActualHeight 仍为 0，算出的位置不正确。
         Dispatcher.BeginInvoke(new Action(() => RepositionIndicator(animate: true)),
             DispatcherPriority.Render);
+    }
+
+    // ---- 启动时检查更新 ----
+
+    /// <summary>
+    /// 启动时在后台查一次更新。
+    /// <para>
+    /// 必须在 Loaded 之后、且**不 await**：网络慢或不通时不能拖住窗口显示 ——
+    /// 更新检查失败绝不该影响程序能不能用。
+    /// </para>
+    /// <para>
+    /// 结果写进单例的 <see cref="AppUpdater"/>，不弹任何对话框：用户没主动问的时候，
+    /// 打断式弹窗比"设置页里多一行"更烦人。
+    /// </para>
+    /// </summary>
+    private void CheckForUpdatesOnStartup()
+    {
+        if (_updateChecked) return;
+        _updateChecked = true;
+
+        // 测试宿主会反复建窗口，每次都真的联网会让整套测试慢到超时，而且结果随网络抖动而变。
+        // 用一个环境变量就能关掉，不必让生产代码为测试开后门。
+        if (Environment.GetEnvironmentVariable("PAPERCOIN_NO_UPDATE_CHECK") == "1") return;
+
+        var config = App.Services?.GetService(typeof(ConfigService)) as ConfigService;
+        if (config?.GetAppConfig().App.AutoUpdate != true) return;
+
+        var updater = App.Services?.GetService(typeof(AppUpdater)) as AppUpdater;
+        if (updater is null) return;
+
+        // 结果记在单例的 AppUpdater 上，设置页构造时自己接手 ——
+        // 不往 SettingsViewModel 里塞：那是 transient 的，这里拿到的是另一个实例，
+        // 写进去的结果用户永远看不到。
+        _ = Dispatcher.BeginInvoke(
+            new Action(() => _ = updater.CheckAndRememberAsync(
+                UpdateSource.Github, Version.Parse(Constants.AppVersion))),
+            DispatcherPriority.ApplicationIdle);
     }
 
     // ---- 背部高斯模糊 ----

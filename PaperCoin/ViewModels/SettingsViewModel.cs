@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -20,21 +20,39 @@ public partial class SettingsViewModel : ObservableObject
 
     private readonly ConfigService _configService;
     private readonly ThemeManager _themeManager;
+    private readonly AppUpdater _updater;
 
-    public SettingsViewModel(ConfigService configService, ThemeManager themeManager)
+    public SettingsViewModel(ConfigService configService, ThemeManager themeManager, AppUpdater updater)
     {
         _configService = configService;
         _themeManager = themeManager;
+        _updater = updater;
 
         ApplyThemeCommand = new RelayCommand<string>(ApplyThemeMode);
         ApplyThemeStyleCommand = new RelayCommand<string>(ApplyThemeStyle);
         ToggleAutoStartCommand = new RelayCommand(ToggleAutoStart);
         ToggleAutoUpdateCommand = new RelayCommand(ToggleAutoUpdate);
+        CheckUpdateCommand = new RelayCommand(() => _ = CheckForUpdateAsync(manual: true), () => !IsBusy);
+        InstallUpdateCommand = new RelayCommand(() => _ = DownloadAndInstallAsync(), () => CanInstall);
         OpenReleasesCommand = new RelayCommand(OpenReleases);
         ResetCommand = new RelayCommand(ResetToDefault);
         OpenDataFolderCommand = new RelayCommand(OpenDataFolder);
 
         LoadFrom(_configService.GetAppConfig());
+
+        // 读启动时后台查询留下的结果：SettingsViewModel 是 transient 的，
+        // 不在这里接手的话，那次查询白做了 —— 用户进设置页只会看到一片空白。
+        AdoptRememberedResult();
+    }
+
+    /// <summary>把单例里记住的查询结果搬到界面上</summary>
+    private void AdoptRememberedResult()
+    {
+        if (_updater.Available is not { } release) return;
+
+        _available = release;
+        ReleaseNotes = Summarize(release.Notes);
+        _checkMessage = UpdateHeadline;
     }
 
     public ICommand ApplyThemeCommand { get; }
@@ -43,6 +61,12 @@ public partial class SettingsViewModel : ObservableObject
     public ICommand ApplyThemeStyleCommand { get; }
     public ICommand ToggleAutoStartCommand { get; }
     public ICommand ToggleAutoUpdateCommand { get; }
+
+    /// <summary>手动查一次有没有新版本</summary>
+    public ICommand CheckUpdateCommand { get; }
+
+    /// <summary>下载并启动安装程序</summary>
+    public ICommand InstallUpdateCommand { get; }
     public ICommand OpenReleasesCommand { get; }
     public ICommand ResetCommand { get; }
     public ICommand OpenDataFolderCommand { get; }
@@ -203,22 +227,250 @@ public partial class SettingsViewModel : ObservableObject
     public string UpdateSource
     {
         get => _updateSource;
-        private set => SetProperty(ref _updateSource, value);
+        private set
+        {
+            if (!SetProperty(ref _updateSource, value)) return;
+
+            OnPropertyChanged(nameof(UpdateSourceKind));
+            OnPropertyChanged(nameof(UpdateStatusText));
+        }
     }
 
     /// <summary>可选更新源</summary>
     public IReadOnlyList<string> UpdateSources { get; } = ["Github", "Gitee"];
 
-    /// <summary>更新状态说明，如实标注检查逻辑尚未接入</summary>
-    public string UpdateStatusText => AutoUpdate
-        ? $"已启用（更新源 {UpdateSource}）・检查逻辑尚未接入"
-        : "已关闭";
+    /// <summary>把界面上的字符串收敛成枚举。<c>UpdateSource</c> 是配置里可被手改的文本。</summary>
+    internal Service.UpdateSource UpdateSourceKind =>
+        string.Equals(UpdateSource, "Gitee", StringComparison.OrdinalIgnoreCase)
+            ? Service.UpdateSource.Gitee
+            : Service.UpdateSource.Github;
+
+    /// <summary>更新行的一句话状态：开关状态 + 当前进展</summary>
+    public string UpdateStatusText => _checkMessage.Length > 0
+        ? _checkMessage
+        : AutoUpdate ? $"已启用（更新源 {UpdateSource}）" : "已关闭";
+
+    // ---- 检查与安装 ----
+
+    private string _checkMessage = "";
+    private string _releaseNotes = "";
+    private string _downloadText = "";
+    private UpdateRelease? _available;
+    private bool _isBusy;
+    private bool _isDownloading;
+    private double _downloadPercent;
+
+    /// <summary>查询或下载进行中。期间不允许重复触发。</summary>
+    public bool IsBusy
+    {
+        get => _isBusy;
+        private set
+        {
+            if (!SetProperty(ref _isBusy, value)) return;
+
+            OnPropertyChanged(nameof(CanInstall));
+            OnPropertyChanged(nameof(IsIdle));
+
+            (CheckUpdateCommand as RelayCommand)?.NotifyCanExecuteChanged();
+            (InstallUpdateCommand as RelayCommand)?.NotifyCanExecuteChanged();
+        }
+    }
+
+    /// <summary>没在忙的时候才显示"检查"按钮</summary>
+    public bool IsIdle => !IsBusy;
+
+    /// <summary>正在下载安装包</summary>
+    public bool IsDownloading
+    {
+        get => _isDownloading;
+        private set => SetProperty(ref _isDownloading, value);
+    }
+
+    /// <summary>下载进度 0..1；总长未知时为 0</summary>
+    public double DownloadPercent
+    {
+        get => _downloadPercent;
+        private set => SetProperty(ref _downloadPercent, value);
+    }
+
+    /// <summary>下载进度文案</summary>
+    public string DownloadText
+    {
+        get => _downloadText;
+        private set => SetProperty(ref _downloadText, value);
+    }
+
+    /// <summary>发现了可安装的新版本</summary>
+    public bool HasUpdate => _available is not null;
+
+    /// <summary>可以点"下载并安装"：有新版、且这个发布里带安装包</summary>
+    public bool CanInstall => _available is { InstallerUrl: not null } && !IsBusy;
+
+    /// <summary>有新版本但没有可安装的文件，只能去发布页手动下载</summary>
+    public bool MustDownloadManually => _available is { InstallerUrl: null };
+
+    /// <summary>新版本的发布说明，直接展示给用户</summary>
+    public string ReleaseNotes
+    {
+        get => _releaseNotes;
+        private set
+        {
+            if (SetProperty(ref _releaseNotes, value)) OnPropertyChanged(nameof(HasReleaseNotes));
+        }
+    }
+
+    public bool HasReleaseNotes => !string.IsNullOrWhiteSpace(ReleaseNotes);
+
+    /// <summary>新版本的标题行，如「发现新版本 1.3.7（当前 1.3.6）」</summary>
+    public string UpdateHeadline => _available is { } release && release.Version.Major > 0
+        ? $"发现新版本 {release.Version}（当前 {Constants.AppVersion}）" +
+          (release.InstallerUrl is null ? "· 需手动下载" : "")
+        : "";
+
+    /// <summary>
+    /// 查一次更新。
+    /// </summary>
+    /// <param name="manual">
+    /// 用户主动点的。手动时即使"已是最新"也要说出来；自动检查时只在真有新版时才吭声，
+    /// 否则每次启动都往界面上写一句废话。
+    /// </param>
+    internal async Task CheckForUpdateAsync(bool manual)
+    {
+        if (IsBusy) return;
+
+        IsBusy = true;
+
+        try
+        {
+            if (manual) _checkMessage = "正在检查…";
+
+            _checkMessage = "正在检查…";
+            OnPropertyChanged(nameof(UpdateStatusText));
+
+            var current = Version.Parse(Constants.AppVersion);
+            var check = await _updater.CheckAndRememberAsync(UpdateSourceKind, current);
+
+            _available = null;
+            ReleaseNotes = "";
+
+            // "没有发布过任何版本"时后端给的是一个占位发布（版本 0），不能当更新
+            if (check.Release is { } release && release.Version > current)
+            {
+                _available = release;
+
+                ReleaseNotes = Summarize(release.Notes);
+                _checkMessage = UpdateHeadline;
+            }
+            else
+            {
+                _checkMessage = check.IsFailure || manual ? check.Message : "";
+            }
+
+            OnPropertyChanged(nameof(HasUpdate));
+            OnPropertyChanged(nameof(CanInstall));
+            OnPropertyChanged(nameof(MustDownloadManually));
+            OnPropertyChanged(nameof(UpdateHeadline));
+            OnPropertyChanged(nameof(UpdateStatusText));
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// 下载安装包并交给系统安装。
+    /// <para>
+    /// 这里**不代替用户关掉自己**：安装程序会自己提示"请关闭 PaperCoin"。
+    /// 进程还活着时 MSI 会挡下来并要求重试，这是最不会出错的做法 ——
+    /// 自作主张退出会在用户取消安装时留下一个已经关掉的程序。
+    /// </para>
+    /// </summary>
+    internal async Task DownloadAndInstallAsync()
+    {
+        if (!CanInstall || _available is not { InstallerUrl: not null } release) return;
+
+        IsBusy = true;
+        IsDownloading = true;
+        DownloadPercent = 0;
+        DownloadText = "正在下载…";
+
+        try
+        {
+            _updater.Progress = new Progress<(long Done, long Total)>(p =>
+            {
+                if (p.Total <= 0)
+                {
+                    DownloadText = $"正在下载…{p.Done / 1024.0 / 1024.0:0.0} MB";
+                    return;
+                }
+
+                DownloadPercent = Math.Clamp(p.Done / (double)p.Total, 0, 1);
+                DownloadText = $"正在下载…{DownloadPercent * 100:0}%（{p.Done / 1024.0 / 1024.0:0.0}/" +
+                               $"{p.Total / 1024.0 / 1024.0:0.0} MB）";
+            });
+
+            var path = AppUpdater.DownloadPathFor(release.InstallerName);
+
+            var failure = await _updater.DownloadAsync(release.InstallerUrl, path);
+
+            if (failure.Length > 0)
+            {
+                _checkMessage = failure;
+                OnPropertyChanged(nameof(UpdateStatusText));
+                return;
+            }
+
+            DownloadText = "下载完成，正在启动安装程序…";
+
+            var launch = AppUpdater.LaunchInstaller(path);
+
+            _checkMessage = launch.Length > 0
+                ? launch
+                : "安装程序已启动，按提示完成升级（会提示关闭本程序）";
+
+            OnPropertyChanged(nameof(UpdateStatusText));
+        }
+        finally
+        {
+            _updater.Progress = null;
+            IsDownloading = false;
+            IsBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// 发布说明常常很长（一个版本塞了几十条），界面上只留前几行。
+    /// 截断而不是滚动：这块地方在设置页里，用户要的是"大概改了什么"。
+    /// </summary>
+    private static string Summarize(string notes, int maxLines = 8)
+    {
+        if (string.IsNullOrWhiteSpace(notes)) return "";
+
+        var lines = notes
+            .Replace("\r\n", "\n")
+            .Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0)
+            .ToArray();
+
+        return lines.Length <= maxLines
+            ? string.Join("\n", lines)
+            : string.Join("\n", lines.Take(maxLines)) + "\n…（完整说明见发布页）";
+    }
 
     private void ToggleAutoUpdate()
     {
         var target = !AutoUpdate;
         AutoUpdate = target;
         Persist(c => c.App.AutoUpdate = target);
+
+        OnPropertyChanged(nameof(UpdateStatusText));
+
+        // 刚打开就顺手查一次：开关拨开却什么都不发生，用户不知道它到底有没有在工作。
+        // 测试里必须能关掉这条 —— 它会真的联网，而测试会反复拨这个开关。
+        if (target && Environment.GetEnvironmentVariable("PAPERCOIN_NO_UPDATE_CHECK") != "1")
+            _ = CheckForUpdateAsync(manual: false);
     }
 
     /// <summary>用系统浏览器打开 GitHub Releases 页面</summary>

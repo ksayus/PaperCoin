@@ -159,6 +159,68 @@
                     </Grid>
                 </Border>
 
+                <!-- 检查更新。开关只是"允许自动查"，查与装都在这块里，
+                     所以它单独占一行 —— 塞进上一行会把状态文字挤没。 -->
+                <Border Style="{DynamicResource SettingRow}">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="0" Orientation="Horizontal"
+                                        VerticalAlignment="Center">
+                                <TextBlock Style="{DynamicResource SettingRowIcon}"
+                                           Text="{DynamicResource IconRefresh}"
+                                           FontSize="17"/>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Text="检查更新" FontSize="13"
+                                               Foreground="{DynamicResource ColorTextTitle}"/>
+                                    <TextBlock Text="{Binding UpdateHeadline, FallbackValue=按需查询新版本}"
+                                               FontSize="10" Margin="0,2,0,0" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource ColorTextSecondary}"/>
+                                </StackPanel>
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                        VerticalAlignment="Center">
+                                <Button Content="检查" Style="{DynamicResource PillButton}"
+                                        Command="{Binding CheckUpdateCommand}"
+                                        Visibility="{Binding IsIdle, Converter={StaticResource BoolToVis}}"/>
+                                <Button Content="下载并安装" Style="{DynamicResource PillButton}"
+                                        Margin="6,0,0,0"
+                                        Command="{Binding InstallUpdateCommand}"
+                                        Visibility="{Binding CanInstall, Converter={StaticResource BoolToVis}}"/>
+                                <Button Content="去发布页" Style="{DynamicResource PillButton}"
+                                        Margin="6,0,0,0"
+                                        Command="{Binding OpenReleasesCommand}"
+                                        Visibility="{Binding MustDownloadManually, Converter={StaticResource BoolToVis}}"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- 下载进度。总长未知时不显示具体百分比，只显示已下载量。 -->
+                        <StackPanel Margin="28,8,0,0"
+                                    Visibility="{Binding IsDownloading, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="{Binding DownloadText}" FontSize="10"
+                                       Foreground="{DynamicResource ColorTextSecondary}"/>
+                            <ProgressBar Height="3" Margin="0,4,0,0"
+                                         Minimum="0" Maximum="1"
+                                         Value="{Binding DownloadPercent, Mode=OneWay}"
+                                         Background="{DynamicResource ColorCardActionBackground}"
+                                         Foreground="{DynamicResource ColorSideBarBtnActive}"
+                                         BorderThickness="0"/>
+                        </StackPanel>
+
+                        <!-- 更新说明。只取前几行，完整内容在发布页。 -->
+                        <TextBlock Margin="28,8,0,0" FontSize="10"
+                                   TextWrapping="Wrap" MaxHeight="150"
+                                   Text="{Binding ReleaseNotes}"
+                                   Foreground="{DynamicResource ColorTextSecondary}"
+                                   Visibility="{Binding HasReleaseNotes, Converter={StaticResource BoolToVis}}"/>
+                    </StackPanel>
+                </Border>
+
                 <Border Style="{DynamicResource SettingRow}">
                     <Grid>
                         <Grid.ColumnDefinitions>

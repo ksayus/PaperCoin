@@ -49,6 +49,7 @@ Windows 桌面记账程序。WPF + .NET 10，单机运行，账单以按日期�
 
 ### 设置
 
+- **自动更新**：打开开关后，启动时在后台查一次新版本，设置页那一行会直接显示结果与更新内容；也可以随时点「检查」手动查。查到之后点「下载并安装」就会下载安装包并启动安装程序。
 - 外观有**两个独立维度**，各三个选项，组合出 6 套调色板（见下文「主题」）：
   - 明暗：跟随系统 / 暗色 / 亮色
   - 风格：经典 / Windows / 液态玻璃
@@ -115,11 +116,24 @@ $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 
 安装项目引用的是 **PublishItems**（发布产物）而不是主输出：VS 安装项目对 .NET Core 项目的主输出只能取到 `PaperCoin.dll` 与 `runtimeconfig.json`，会漏掉 exe 和全部依赖 DLL。因此**必须先 `dotnet publish`**，否则安装包内容不完整。
 
-#### 两个踩过的坑
+#### 三个踩过的坑
 
-**一、`dotnet publish` 之后要立刻打包，中间不能再 `dotnet build`。** `publish` 目录会被后续的普通构建覆盖成"中间产物"，而 MSI 打的就是那一刻的 `publish` 目录。曾经出现过：`publish`（好的）→ 再构建一次（坏的，见下条）→ 打包，结果装出来的程序一启动就崩。
+**一、安装项目引用的是中间产物，不只是 `publish` 目录。** vdproj 里那个 `ProjectOutput` 的 `SourcePath` 指向：
 
-**二、`devenv` 增量构建可能复用上一次失败构建残留的 `*.g.cs`。** 会出现"源码没问题、编译产物里却多出一个重名"的情况：`MainWindow` 里 `GlassBackdrop` 注册了两遍，程序一启动就 `XamlParseException`。**构建日志里会有 `CS0102` 或 `CS5001` 之类的报错，不能当噪音翻过去。** 遇到就先删 `PaperCoin/obj/Release` 与 `PaperCoin/bin/Release` 再重来。
+```
+..\PaperCoin\obj\Release\net10.0-windows\apphost.exe
+```
+
+也就是说 **`PaperCoin.dll` 来自 `publish` 目录，而 `PaperCoin.exe` 来自 `obj\Release`**。两者一旦不同步，包里的 exe 与 dll 就不是同一次构建的产物 —— 这一条至少造成了两次"装出来打不开"：
+
+- 1.3.4：`obj` 里有上一次失败构建残留的 `*.g.cs`，编出来的 `MainWindow` 里 `GlassBackdrop` 注册了两遍，XAML 加载直接抛 `XamlParseException`。
+- 1.3.7：`publish` 之后又构建过，`obj\Release` 里的 dll 被换成了另一份，与 `publish` 里的 dll **大小相同、版本号相同、内容不同**，而那份带着重名。
+
+所以**构建日志里的 `CS0102` / `CS5001` / `CS0103` 不能当噪音翻过去**；遇到就先删 `PaperCoin/obj`、`PaperCoin/bin`、`PaperCoin.Setup/Release`、`PaperCoin.Setup/obj` 再重来。
+
+**二、顺序是"清 → publish → 只打包"，中间不插任何构建。** `publish` 会把中间产物一次性生成好，之后直接 `devenv` 打包即可。反过来（先 build 后 publish，或 publish 后再 build）都会让两处产物错位。
+
+**三、包里的 dll 必须与 `publish` 目录逐字节相同 —— 用哈希卡住，不要用"看着对"。** 曾经用"BAML 里某个名字出现几次"当验证指标，那个指标**本身无效**（正常的 XAML 名称也会出现两次：声明 + 连接 ID），于是漏掉了上面那个 dll 不一致的问题。正确的核对方式见下。
 
 发布前跑一遍下面这段，从 MSI 里把 exe 抽出来实际启动一次。版本号对不代表能跑：
 
@@ -128,6 +142,14 @@ $test = Join-Path $env:TEMP 'pc-extract'
 Remove-Item $test -Recurse -Force -ErrorAction SilentlyContinue
 Start-Process msiexec -ArgumentList "/a","`"PaperCoin.Setup\Release\PaperCoin.msi`"","/qn","TARGETDIR=`"$test`"" -Wait
 
+# 1) 包里的 dll 必须与 publish 逐字节相同
+$pubHash = (Get-FileHash PaperCoin\bin\Release\net10.0-windows\publish\PaperCoin.dll -Algorithm MD5).Hash
+$extHash = (Get-FileHash (Get-ChildItem $test -Recurse -Filter PaperCoin.dll |
+    Select-Object -First 1).FullName -Algorithm MD5).Hash
+
+if ($pubHash -ne $extHash) { throw "包里的 dll 不是 publish 那份，先清 obj/bin/Release 重来" }
+
+# 2) 真的启动一次。版本号对、哈希对，都不等于能跑
 $exe = Get-ChildItem $test -Recurse -Filter PaperCoin.exe | Select-Object -First 1
 $p = Start-Process $exe.FullName -PassThru
 if (-not $p.WaitForExit(10000)) { "OK：起来了"; $p.Kill() } else { "崩了，退出码 $($p.ExitCode)" }
@@ -270,6 +292,23 @@ DarkLiquid    BrightLiquid    半透明材质 + 发丝高光
 > **已知取舍**：玻璃风格的正文对比度门槛是 **4.0:1**，而不是 WCAG AA 的 4.5:1。这是材质的物理限制而非疏漏 —— 模糊结果可能是纯白，而"玻璃"又必须让模糊透出来；要让白字在纯白模糊上稳过 4.5:1，面板 Alpha 得高到几乎不透明，玻璃就不成立了。实测最坏情形 4.2:1，仍清晰可读。其余四种调色板照旧按 4.5:1 卡（实测 12.8–17.4）。
 
 **风格解析在 `ThemeManager`**：`Mode`（明暗）+ `Style`（风格）各自持久化到配置的 `Theme` 与 `ThemeStyle`，`Palette` 是按两者算出的字典名，`ResolvedThemeChanged` 带的就是它。
+
+### 自动更新
+
+查询走 GitHub Releases API（`api.github.com/repos/ksayus/PaperCoin/releases/latest`），也能切到 Gitee 的对应接口。源与解析分别在 `PaperCoin.Service/AppUpdater.cs`，界面在设置页「检查更新」那一行。
+
+几个刻意的设计：
+
+- **检查失败绝不影响程序使用**。网络不通、超时、限流、响应看不懂，全部收敛成一句能显示给用户的话，不抛异常、不弹对话框。用户没主动问的时候，打断式弹窗比"设置页里多一行"烦人得多。
+- **各给各的说法**，而不是一律"检查失败"：`404` 说"还没有发布过任何版本"（这和网络不通是两回事），`403`/`429` 说"查询被拒绝（HTTP 403），稍后再试"，超时说"查询超时"。
+- **版本比较按三段补零**：`1.3` 与 `1.3.0` 要判成相等，否则每次启动都会报一个不存在的新版本。`v` 前缀、`-beta` 后缀都忽略。
+- **安装包优先选 `setup.exe`**，其次 MSI：setup.exe 自带引导界面，双击即用；MSI 得交给 `msiexec`。
+- **下载到临时目录**（`%TEMP%\PaperCoin-Update`），不碰程序目录 —— 升级失败也不会留半个安装包在里面。
+- **不代替用户关掉自己**：安装程序会自己提示"请关闭 PaperCoin"。进程还活着时 MSI 会挡下来要求重试，这是最不会出错的做法；自作主张退出会在用户取消安装时留下一个已经关掉的程序。
+
+> **查询结果为什么存在单例的 `AppUpdater` 上。** `SettingsViewModel` 是 transient 的，每次进设置页都会新建一个。启动时那次后台查询如果写进 ViewModel，用户点进设置页时是**另一个实例**，结果就丢了 —— 表现是"启动时查过，但设置页里什么都没有"。所以结果由单例持有，设置页构造时自己接手。
+
+> **测试里必须关掉联网。** 宿主会反复建窗口、反复拨自动更新开关，每次都真去打网络会让整套测试慢到超时，而且结果随网络抖动而变。用环境变量 `PAPERCOIN_NO_UPDATE_CHECK=1` 关掉（测试宿主自己设），更新逻辑本身由第 32/33 项对着假响应验。另外 `--update-live` 可以对着真实发布查一次，`--update-as 1.3.5` 能假装自己是旧版本，用来验"发现有新版"那条真实路径。
 
 ### 图标字体
 

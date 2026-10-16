@@ -109,6 +109,9 @@ public partial class App : Application
         // 账单持久化。内部持有内存索引，注册为单例避免重复构建索引。
         services.AddSingleton<BillRepository>();
 
+        // 自动更新。单例：它内部持有 HttpClient，反复 new 会把连接池和 DNS 缓存丢掉。
+        services.AddSingleton(_ => new AppUpdater());
+
         services.AddTransient<TodayBillViewModel>();
         services.AddTransient<CalenderBillViewModel>();
         services.AddTransient<StatisticsViewModel>();

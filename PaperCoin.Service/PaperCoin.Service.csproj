@@ -32,4 +32,10 @@
                       LogicalName="PaperCoin.Icon.papercoin-icon.ico" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 更新检查的解析与版本比较是纯函数，值得直接断言；把它们做成 public 只是为了测试会污染 API。
+         冒烟测试会对着真实的 GitHub / Gitee 响应形状检验这两件事。 -->
+    <InternalsVisibleTo Include="UiSmokeTest" />
+  </ItemGroup>
+
 </Project>
