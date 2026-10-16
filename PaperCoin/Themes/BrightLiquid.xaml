@@ -6,7 +6,9 @@
 
          亮色玻璃的 Alpha 比暗色更高：底色本就亮，面板太透明会被背板与桌面内容干扰，
          文字边缘会糊。发丝高光用纯白，正文保持接近纯黑以保证可读性。 -->
-    <SolidColorBrush x:Key="ColorGlassBackdrop" Color="#FFF2F4F8"/>
+    <SolidColorBrush x:Key="ColorGlassBackdrop" Color="Transparent"/>
+
+    <SolidColorBrush x:Key="ColorGlassScrim" Color="#CFFFFFFF"/>
 
     <!-- 标题栏 -->
     <SolidColorBrush x:Key="ColorTitleTop" Color="#8CFFFFFF"/>
@@ -27,9 +29,10 @@
     <SolidColorBrush x:Key="ColorAddNewBillBtnOver" Color="#EB2E93FF"/>
     <SolidColorBrush x:Key="ColorAddNewBillBtnPressed" Color="#CC0A72DB"/>
 
-    <!-- 文字 -->
+    <!-- 文字。次要文字比经典亮色更实（#CC 而非 #99）：玻璃面板下可能是"深色内容模糊后 +
+         0x33 色调"的暗底，半透明太高的次要文字会掉到 3:1 以下（实测 #99 是 2.7:1）。 -->
     <SolidColorBrush x:Key="ColorTextTitle" Color="#FF1C1C1E"/>
-    <SolidColorBrush x:Key="ColorTextSecondary" Color="#993C3C43"/>
+    <SolidColorBrush x:Key="ColorTextSecondary" Color="#CC2A2A2E"/>
 
     <!-- 金额：正数为收入，负数为支出 -->
     <SolidColorBrush x:Key="ColorPositive" Color="#0E8F55"/>

@@ -1,9 +1,11 @@
 ﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 using LAE;
 using Microsoft.Extensions.DependencyInjection;
+using PaperCoin.Service;
 using PaperCoin.ViewModels;
 using PaperCoin.Views;
 
@@ -41,8 +43,29 @@ public partial class MainWindow : Window
 
     private readonly Dictionary<string, UserControl> _pageCache = new();
 
+    /// <summary>
+    /// 是否用 WPF 的分层窗口。由 <see cref="App.UsesLayeredWindow"/> 在窗口构造前定下，
+    /// 这里只读来派生布局相关的东西（阴影、圆角），不能再改 —— 句柄建好后改不了。
+    /// </summary>
+    internal bool UsesLayeredWindow => App.UsesLayeredWindow;
+
+    /// <summary>
+    /// 玻璃背板的圆角。走 WPF 分层窗口时自己裁角；走 DWM 背板时由系统裁，
+    /// 这里留 0，否则圆角外会露出一圈没被裁到的窗口底色。
+    /// </summary>
+    internal CornerRadius WindowCornerRadius => UsesLayeredWindow ? new CornerRadius(7) : new CornerRadius(0);
+
     public MainWindow()
     {
+        // AllowsTransparency 必须在 InitializeComponent 之前设：窗口句柄一旦建好就不能再改。
+        AllowsTransparency = UsesLayeredWindow;
+
+        // 两种情况都用 Transparent，但含义不同：
+        //  · 分层窗口下是"真透明"，桌面透上来，圆角由 WPF 裁。
+        //  · 非分层窗口下是"这个像素不着色"，DWM 的系统背板正好露出来 ——
+        //    这里若给不透明色（哪怕黑色）就把背板整个盖住，模糊白设。
+        Background = Brushes.Transparent;
+
         InitializeComponent();
         this.MaxHeight = SystemParameters.PrimaryScreenHeight;
 
@@ -59,9 +82,44 @@ public partial class MainWindow : Window
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
+        // 背板要在句柄就绪后设，而且窗口尺寸变化后 DWM 偶尔会把它丢掉，所以跟着布局一起校正
+        ApplyBackdrop();
+        LayoutUpdated += (_, _) => ApplyBackdrop();
+
         // 推迟到 Render 优先级：此时布局未完成，NavPanel.ActualHeight 仍为 0，算出的位置不正确。
         Dispatcher.BeginInvoke(new Action(() => RepositionIndicator(animate: true)),
             DispatcherPriority.Render);
+    }
+
+    // ---- 背部高斯模糊 ----
+
+    /// <summary>上一次应用的背板状态，避免每次布局都重复调 DWM</summary>
+    private (bool Applied, bool Dark)? _backdropState;
+
+    /// <summary>
+    /// 把 DWM 的系统背板对齐到当前主题。
+    /// <para>
+    /// 只有"非分层窗口 + 液态玻璃"才开背板：非分层是系统背板的硬要求，
+    /// 而其它风格表面本就不透明，开了也看不见，还会白白多一层合成开销。
+    /// </para>
+    /// </summary>
+    private void ApplyBackdrop()
+    {
+        if (!IsLoaded || !BackdropBlur.IsSupported) return;
+
+        var theme = App.Services?.GetService(typeof(ThemeManager)) as ThemeManager;
+        bool want = !UsesLayeredWindow && theme?.IsLiquidStyle == true;
+        bool dark = theme?.IsDarkResolved ?? true;
+
+        if (_backdropState == (want, dark)) return;
+        _backdropState = (want, dark);
+
+        var handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+
+        // 明度由 XAML 里的 ColorGlassScrim 控制，不再依赖 DWM 色调
+        // （DWMWA_BACKDROP_TINT_COLOR 在部分 Windows 11 版本上会被拒）。
+        if (want) BackdropBlur.Apply(handle, dark);
+        else BackdropBlur.Clear(handle);
     }
 
     // ---- 窗口控制 ----

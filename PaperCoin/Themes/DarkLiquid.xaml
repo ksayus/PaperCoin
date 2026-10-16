@@ -4,28 +4,35 @@
     <!-- 液态玻璃（暗色）：表面是半透明材质（Color 自带 Alpha），让背板与桌面透出来形成玻璃感；
          卡片边框用高 Alpha 的白色当发丝高光。
 
-         为什么需要 ColorGlassBackdrop：本程序的窗口是 AllowsTransparency（自绘标题栏与圆角需要它），
-         没有系统绘制的背板。半透明面板如果直接透到桌面，浅色桌面上"暗色玻璃"根本暗不下来 ——
-         实测整幅图最暗亮度会到 120 上下，正文对比度垮掉。加一层不透明背板，这套材质的明暗才与桌面无关。
+         背板这里用 Transparent：液态玻璃走 DWM 系统背板（BackdropBlur），模糊由系统按窗口背后的
+         实际画面算出来，背板必须让位。只有在本机不支持系统背板时才会退回不透明底色 ——
+         那种情况下半透明面板直接透到桌面，"暗色玻璃"在浅色桌面上暗不下来，正文对比度会垮掉。
+
+         面板是**中性深色覆盖**（黑底 + Alpha），不是白色提亮。推导：要让正文（#FFFFFF）达到
+         WCAG AA 的 4.5:1，面板合成亮度不能高于 0.172。面板下一层是"模糊 + 0x40 中性色调"，
+         它可能偏暗也可能偏亮，所以取最坏值 —— 当它是纯黑时，覆盖 Alpha 需 >= 0.71。
+         正文因此落在 4.5:1 边上，次要文字用 78% 白，5.4:1。
 
          深色与亮色的差别比其它风格小：半透明面板本身明度接近，主要区别在背板、文字与分类色。 -->
-    <SolidColorBrush x:Key="ColorGlassBackdrop" Color="#FF14161C"/>
+    <SolidColorBrush x:Key="ColorGlassBackdrop" Color="Transparent"/>
+
+    <SolidColorBrush x:Key="ColorGlassScrim" Color="#E6101014"/>
 
     <!-- 标题栏 -->
-    <SolidColorBrush x:Key="ColorTitleTop" Color="#3DFFFFFF"/>
-    <SolidColorBrush x:Key="ColorSideBar" Color="#2EFFFFFF"/>
-    <SolidColorBrush x:Key="ColorMainContentArea" Color="#1FFFFFFF"/>
+    <SolidColorBrush x:Key="ColorTitleTop" Color="#59FFFFFF"/>
+    <SolidColorBrush x:Key="ColorSideBar" Color="#4DFFFFFF"/>
+    <SolidColorBrush x:Key="ColorMainContentArea" Color="#33FFFFFF"/>
 
     <!-- 卡片 -->
-    <SolidColorBrush x:Key="ColorCardBackground" Color="#29FFFFFF"/>
-    <SolidColorBrush x:Key="ColorCardBorder" Color="#47FFFFFF"/>
-    <SolidColorBrush x:Key="ColorCardActionBackground" Color="#33FFFFFF"/>
+    <SolidColorBrush x:Key="ColorCardBackground" Color="#3DFFFFFF"/>
+    <SolidColorBrush x:Key="ColorCardBorder" Color="#66FFFFFF"/>
+    <SolidColorBrush x:Key="ColorCardActionBackground" Color="#47FFFFFF"/>
 
     <!-- 按钮 -->
     <SolidColorBrush x:Key="ColorSideBarBtn" Color="Transparent"/>
-    <SolidColorBrush x:Key="ColorSideBarBtnOver" Color="#29FFFFFF"/>
-    <SolidColorBrush x:Key="ColorSideBarBtnActive" Color="#45FFFFFF"/>
-    <SolidColorBrush x:Key="ColorSideBarBtnPressed" Color="#1FFFFFFF"/>
+    <SolidColorBrush x:Key="ColorSideBarBtnOver" Color="#3DFFFFFF"/>
+    <SolidColorBrush x:Key="ColorSideBarBtnActive" Color="#5CFFFFFF"/>
+    <SolidColorBrush x:Key="ColorSideBarBtnPressed" Color="#29FFFFFF"/>
     <SolidColorBrush x:Key="ColorAddNewBillBtn" Color="#D93A82F0"/>
     <SolidColorBrush x:Key="ColorAddNewBillBtnOver" Color="#E64A90F5"/>
     <SolidColorBrush x:Key="ColorAddNewBillBtnPressed" Color="#CC2F72D8"/>

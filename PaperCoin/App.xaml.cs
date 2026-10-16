@@ -28,6 +28,14 @@ public partial class App : Application
     /// </summary>
     private static Mutex? _singleInstance;
 
+    /// <summary>
+    /// 主窗口是否用 WPF 的分层窗口（<c>AllowsTransparency=True</c>）。
+    /// 由 <see cref="ThemeManager.SavedStyleNeedsLayeredWindow"/> 在窗口构造前定下，
+    /// MainWindow 只能读、不能改。分层窗口换来圆角裁剪与 WPF 阴影，
+    /// 但会让 DWM 系统背板失效 —— 液态玻璃需要后者。
+    /// </summary>
+    internal static bool UsesLayeredWindow { get; private set; } = true;
+
     /// <summary>本项目在 GitHub Releases 的固定地址</summary>
     internal const string ReleasesUrl = "https://github.com/ksayus/PaperCoin/releases";
 
@@ -70,6 +78,12 @@ public partial class App : Application
             .CreateLogger();
 
         Log.Information("PaperCoin 启动, 版本{Version}", Constants.AppVersion);
+
+        // 窗口构造之前就要定下"是否分层窗口"：AllowsTransparency 不能在句柄建好之后改，
+        // 而它决定液态玻璃能否用上 DWM 系统背板（真背部模糊）。
+        UsesLayeredWindow = ThemeManager.SavedStyleNeedsLayeredWindow(BackdropBlur.IsSupported);
+        Log.Information("窗口分层={Layered}（系统背板可用={Supported}）",
+            UsesLayeredWindow, BackdropBlur.IsSupported);
 
         // 记下安装位置，安装程序升级时靠它认出旧路径
         InstallLocation.Record();

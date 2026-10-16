@@ -60,12 +60,27 @@ $cases = @(
         Test = '8.'
     },
     @{
-        Name = '液态玻璃不给半透明（全用不透明色）'
+        Name = '窗口背景改成不透明（盖住 DWM 背板）'
         File = 'PaperCoin\Themes\DarkLiquid.xaml'
-        From = '    <SolidColorBrush x:Key="ColorCardBackground" Color="#29FFFFFF"/>'
-        To   = '    <SolidColorBrush x:Key="ColorCardBackground" Color="#FFFFFFFF"/>'
+        From = '    <SolidColorBrush x:Key="ColorGlassBackdrop" Color="Transparent"/>'
+        To   = '    <SolidColorBrush x:Key="ColorGlassBackdrop" Color="#FF14161C"/>'
         Test = '1.'
     },
+    @{
+        Name = '液态玻璃仍走分层窗口（DWM 背板失效）'
+        File = 'PaperCoin.Service\ThemeManager.cs'
+        From = '            return NormalizeStyle(config.App.ThemeStyle) != StyleLiquid;'
+        To   = '            return true;'
+        Test = '28.'
+    },
+    @{
+        Name = '玻璃明度层被拿掉（模糊太亮时白字读不清）'
+        File = 'PaperCoin\Themes\DarkLiquid.xaml'
+        From = '    <SolidColorBrush x:Key="ColorGlassScrim" Color="#E6101014"/>'
+        To   = '    <SolidColorBrush x:Key="ColorGlassScrim" Color="Transparent"/>'
+        Test = '1.'
+    },
+
     @{
         Name = '下拉框选中项文本不给前景色'
         File = 'PaperCoin\Themes\Controls.xaml'

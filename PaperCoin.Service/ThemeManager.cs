@@ -128,6 +128,37 @@ public class ThemeManager
     public static string PreviewPalette(string? style, string brightness)
         => Compose(brightness == Dark ? Dark : Bright, NormalizeStyle(style), forPreview: true);
 
+    /// <summary>
+    /// 配置里保存的风格是否需要"分层窗口"（<c>AllowsTransparency=True</c>）。
+    /// <para>
+    /// 只有液态玻璃不需要：它要的是窗口背后的**真实高斯模糊**，那由 DWM 系统背板提供，
+    /// 而系统背板只对非分层窗口生效。WPF 的分层窗口由 <c>AllowsTransparency=True</c> 打开，
+    /// 它同时带来圆角裁剪与 <c>DropShadowEffect</c> 的能力 —— 两种能力互斥，不可兼得。
+    /// </para>
+    /// <para>
+    /// 必须在窗口**构造之前**调用：<c>AllowsTransparency</c> 不能在窗口句柄建好之后改。
+    /// 所以这里直接读配置文件，不要求调用方先把 <see cref="ThemeManager"/> 建出来。
+    /// </para>
+    /// </summary>
+    /// <param name="backdropSupported">本机是否支持 DWM 系统背板</param>
+    public static bool SavedStyleNeedsLayeredWindow(bool backdropSupported)
+    {
+        // 本机不支持系统背板时液态玻璃会退回不透明材质（见各主题字典的 ColorGlassBackdrop），
+        // 那时它就是普通的不透明表面，照旧走分层窗口，圆角裁剪与阴影都还能用。
+        if (!backdropSupported) return true;
+
+        try
+        {
+            var config = new ConfigService().GetAppConfig();
+            return NormalizeStyle(config.App.ThemeStyle) != StyleLiquid;
+        }
+        catch (Exception)
+        {
+            // 读配置失败（首次运行、磁盘异常）时按默认风格处理，不能让窗口建不出来
+            return true;
+        }
+    }
+
     /// <summary>重新解析当前模式；模式不是 System 时不做任何事，调用方无需自行判断。</summary>
     /// <returns>实际装载的调色板名</returns>
     public string Refresh() => Recompute();

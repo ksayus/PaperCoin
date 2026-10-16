@@ -20,23 +20,50 @@
     </shell:WindowChrome.WindowChrome>
     
     <Grid Margin="6">
-        <Grid.Effect>
-            <DropShadowEffect BlurRadius="15" ShadowDepth="0" Opacity="0.5"/>
-        </Grid.Effect>
+        <!-- 阴影只在分层窗口下有意义：非分层窗口里 DropShadowEffect 会被窗口边界裁掉，
+             只在四边留一圈脏边。走 DWM 背板时阴影由系统给。判定见 MainWindow.xaml.cs。 -->
+        <Grid.Style>
+            <Style TargetType="Grid">
+                <Setter Property="Effect">
+                    <Setter.Value>
+                        <DropShadowEffect BlurRadius="15" ShadowDepth="0" Opacity="0.5"/>
+                    </Setter.Value>
+                </Setter>
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding UsesLayeredWindow,
+                                          RelativeSource={RelativeSource AncestorType=Window}}"
+                                 Value="False">
+                        <Setter Property="Effect" Value="{x:Null}"/>
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+        </Grid.Style>
 
         <Grid.RowDefinitions>
             <RowDefinition Height="32"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- 玻璃背板：液态玻璃那套材质是半透明的，必须有东西可透。
-             本窗口是 AllowsTransparency（自绘标题栏与圆角需要它），没有系统背板，
-             半透明面板会直接透到桌面 —— 浅色桌面上"暗色玻璃"暗不下来，文字对比度会垮掉。
-             在透明表面下面垫一层随主题走的底色，材质的明暗就与桌面无关了。
-             其它风格这个键是 Transparent，等于不存在。
+        <!-- 玻璃背板。两种情形都靠它：
+             · 有 DWM 背板（非分层窗口）时它是 Transparent，让系统给的模糊透上来 ——
+               这就是"按背后画面算出来的颜色"。
+             · 没有 DWM 背板时它是一层不透明底色，避免半透明面板直接透到桌面、
+               浅色桌面上暗色玻璃暗不下来。
              放在 Children 的第一个：Grid 按声明顺序叠放，先声明的在下层。 -->
-        <Border x:Name="GlassBackdrop" Grid.RowSpan="2" CornerRadius="7"
+        <Border x:Name="GlassBackdrop" Grid.RowSpan="2"
+                CornerRadius="{Binding WindowCornerRadius,
+                               RelativeSource={RelativeSource AncestorType=Window}}"
                 Background="{DynamicResource ColorGlassBackdrop}"/>
+
+        <!-- 玻璃明度层：压在模糊层之上、面板之下。模糊本身不改变明度，窗口压在浅色内容上时
+             模糊结果会很亮，面板上的白字会读不清；压在深色内容上又反过来。
+             这一层把模糊结果的明度钉在固定一侧，对比度就不再看窗口背后是什么。
+             不用 DWM 色调做这件事：DWMWA_BACKDROP_TINT_COLOR 在部分 Windows 11 版本上被拒。
+             其它风格这个键是 Transparent。 -->
+        <Border x:Name="GlassScrim" Grid.RowSpan="2"
+                CornerRadius="{Binding WindowCornerRadius,
+                               RelativeSource={RelativeSource AncestorType=Window}}"
+                Background="{DynamicResource ColorGlassScrim}"/>
 
         <!--标题栏-->
         <Border Grid.Row="0" Background="{DynamicResource ColorTitleTop}"

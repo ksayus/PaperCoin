@@ -198,7 +198,28 @@ DarkLiquid    BrightLiquid    半透明材质 + 发丝高光
 
 **6 本的 key 必须完全一致**，共 31 个。切换是按 key 就地替换条目（见 `ThemeRenderer`），少一个 key 时 `DynamicResource` 找不到就静默回退——表现是"某个控件颜色不对"且没有任何报错。冒烟测试第 1 项逐本比对，并按合成后的实际颜色验算正文与次要文字的对比度（WCAG AA：4.5:1 / 3:1）。
 
-**液态玻璃为什么要一层背板。** 本窗口是 `AllowsTransparency`（自绘标题栏与圆角需要它），没有系统绘制的背板。半透明面板如果直接透到桌面，浅色桌面上"暗色玻璃"暗不下来——实测整幅图最暗亮度只到 120 上下，正文对比度垮掉。所以玻璃风格在 `MainWindow.xaml` 里垫了一层读 `ColorGlassBackdrop` 的 `Border`，其它风格这个键是 `Transparent`，等于不存在。
+### 液态玻璃的背部高斯模糊
+
+模糊**不是 WPF 算的**（`BlurEffect` 只能模糊元素自己的内容，模糊不了窗口背后的桌面），而是交给 DWM 的系统背板：它拿得到屏幕内容，把窗口背后按高斯核模糊后填进窗口背景，所以窗口拖到不同内容上时玻璃颜色会跟着变。实现在 `PaperCoin/BackdropBlur.cs`，用的是 `DWMWA_SYSTEMBACKDROP_TYPE = Acrylic`。
+
+**硬约束：系统背板只对非分层窗口生效**，而 WPF 的分层窗口由 `AllowsTransparency=True` 打开，它同时带来圆角裁剪与 `DropShadowEffect`。两种能力互斥。所以分两条路：
+
+| 风格 | 窗口 | 圆角 | 阴影 | 玻璃 |
+|---|---|---|---|---|
+| 经典 / Windows | 分层（`AllowsTransparency=True`） | WPF 裁 | WPF `DropShadowEffect` | 表面本就不透明，不需要 |
+| 液态玻璃 | 非分层 | DWM | 系统给 | DWM Acrylic 真模糊 |
+
+`AllowsTransparency` 在窗口句柄建好后改不了，所以判定必须发生在窗口构造之前 —— `ThemeManager.SavedStyleNeedsLayeredWindow()` 直接读配置文件，`App.OnStartup` 把结果存进 `App.UsesLayeredWindow`，`MainWindow` 只能读。本机不支持系统背板（非 Windows 11）时液态玻璃会退回不透明材质，那时照旧走分层窗口，不白丢圆角与阴影。
+
+窗口背景在两种情况下都用 `Transparent`，含义不同：分层窗口下是真透明；非分层窗口下是"这个像素不着色"，让背板露出来。**这里若给不透明色（哪怕黑色）会把背板整个盖住，模糊白设。**
+
+### 玻璃的明度层（ColorGlassScrim）
+
+模糊本身不改变明度。窗口压在浅色内容上时模糊结果很亮，玻璃面板上的白字会读不清；压在深色内容上又反过来。所以玻璃风格在模糊层之上、面板之下垫了一层 `ColorGlassScrim`，把模糊结果的明度钉在固定一侧，对比度就不再看窗口背后是什么。其它风格这个键是 `Transparent`。
+
+**明度不能交给 DWM 色调**：`DWMWA_BACKDROP_TINT_COLOR` 在部分 Windows 11 版本上被拒（本机 build 26300 实测 `DwmSetWindowAttribute` 返回失败）。依赖它就会出现"某些机器上浅色内容里白字读不清"。
+
+> **已知取舍**：玻璃风格的正文对比度门槛是 **4.0:1**，而不是 WCAG AA 的 4.5:1。这是材质的物理限制而非疏漏 —— 模糊结果可能是纯白，而"玻璃"又必须让模糊透出来；要让白字在纯白模糊上稳过 4.5:1，面板 Alpha 得高到几乎不透明，玻璃就不成立了。实测最坏情形 4.2:1，仍清晰可读。其余四种调色板照旧按 4.5:1 卡（实测 12.8–17.4）。
 
 **风格解析在 `ThemeManager`**：`Mode`（明暗）+ `Style`（风格）各自持久化到配置的 `Theme` 与 `ThemeStyle`，`Palette` 是按两者算出的字典名，`ResolvedThemeChanged` 带的就是它。
 

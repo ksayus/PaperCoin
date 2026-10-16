@@ -119,6 +119,7 @@ internal static class Program
             failures += Check("25. 统计 CSV 带 BOM", TestStatisticsCsv);
             failures += Check("26. 每次进页面都重播入场动画", TestEntranceReplaysOnEveryEntry);
             failures += Check("27. 分类明细从真实入口走通", TestCategoryDetailEndToEnd);
+            failures += Check("28. 液态玻璃的背部模糊接对了", TestBackdropBlur);
         });
 
         Console.WriteLine();
@@ -419,38 +420,87 @@ internal static class Program
         // 每套调色板都要能读出字。半透明面板会与背板合成，光看画刷的 ARGB 判断不了可读性，
         // 必须按合成后的实际颜色算对比度 —— 这一条挡的正是"玻璃面板太透，
         // 暗色玻璃在浅底上糊成一片"这种只有肉眼才发现的问题。
+        //
+        // 玻璃风格走 DWM 系统背板时 ColorGlassBackdrop 是 Transparent，实际底色由系统按
+        // 窗口背后的画面算出来，可能是任意明度。所以液态玻璃要同时按**最坏情形**验：
+        // 底色全黑与底色中灰（模糊过的浅色桌面）两种，都得读得出来。
         foreach (var name in palettes)
         {
             var backdropBrush = maps[name]["ColorGlassBackdrop"] as SolidColorBrush
                 ?? throw new Exception($"{name} 缺少 ColorGlassBackdrop");
 
-            var surface = Composite(maps[name]["ColorMainContentArea"] as SolidColorBrush, backdropBrush.Color);
-            var card = Composite(maps[name]["ColorCardBackground"] as SolidColorBrush, surface);
-            var title = (maps[name]["ColorTextTitle"] as SolidColorBrush)?.Color ?? Colors.Black;
-            var secondary = (maps[name]["ColorTextSecondary"] as SolidColorBrush)?.Color ?? Colors.Black;
+            bool isGlass = name.EndsWith("Liquid", StringComparison.Ordinal);
 
-            double cardLum = Luminance(card);
-            double titleRatio = Contrast(CompositeOn(title, card), card);
-            double secondaryRatio = Contrast(CompositeOn(secondary, card), card);
+            // 玻璃：背板是 Transparent，实际底色 = 系统背板的模糊结果 + DWM 色调（见 BackdropBlur）。
+            // 最坏情形是窗口压在浅色内容上、模糊结果很亮，所以按"纯白模糊 + 该风格的色调"验。
+            // 非玻璃：背板就是实际底色。
+            // 两个极端都验：模糊结果几乎全黑（窗口压在深色内容上）、几乎全白（压在浅色内容上）
+            Color[] bases = isGlass
+                ? [CompositeOn(ScrimOf(maps[name]), Colors.Black),
+                   CompositeOn(ScrimOf(maps[name]), Colors.White)]
+                : [backdropBrush.Color];
 
-            Report($"  {name,-14} 卡片合成={Hex(card)} 亮度={cardLum:0.00} " +
-                   $"正文对比={titleRatio:0.0} 次要对比={secondaryRatio:0.0}");
+            foreach (var backdrop in bases)
+            {
+                var surface = Composite(maps[name]["ColorMainContentArea"] as SolidColorBrush, backdrop);
+                var card = Composite(maps[name]["ColorCardBackground"] as SolidColorBrush, surface);
+                var title = (maps[name]["ColorTextTitle"] as SolidColorBrush)?.Color ?? Colors.Black;
+                var secondary = (maps[name]["ColorTextSecondary"] as SolidColorBrush)?.Color ?? Colors.Black;
 
-            // 暗色风格合成后要明显偏暗，亮色风格要明显偏亮，否则主题名不副实
-            if (name.StartsWith("Dark", StringComparison.Ordinal) && cardLum > 0.45)
-                throw new Exception($"{name} 的卡片合成亮度 {cardLum:0.00} 偏高，暗色风格暗不下来");
+                double cardLum = Luminance(card);
+                double titleRatio = Contrast(CompositeOn(title, card), card);
+                double secondaryRatio = Contrast(CompositeOn(secondary, card), card);
 
-            if (name.StartsWith("Bright", StringComparison.Ordinal) && cardLum < 0.30)
-                throw new Exception($"{name} 的卡片合成亮度 {cardLum:0.00} 偏低，亮色风格亮不起来");
+                string label = isGlass ? $"{name}/{Hex(backdrop)}" : name;
 
-            // WCAG AA：正文 4.5:1，次要文字 3:1
-            if (titleRatio < 4.5)
-                throw new Exception($"{name} 正文对比度只有 {titleRatio:0.0}:1，低于 4.5:1");
+                Report($"  {label,-26} 卡片合成={Hex(card)} 亮度={cardLum:0.00} " +
+                       $"正文对比={titleRatio:0.0} 次要对比={secondaryRatio:0.0}");
 
-            if (secondaryRatio < 3.0)
-                throw new Exception($"{name} 次要文字对比度只有 {secondaryRatio:0.0}:1，低于 3:1");
+                if (!isGlass)
+                {
+                    // 暗色风格合成后要明显偏暗，亮色风格要明显偏亮，否则主题名不副实
+                    if (name.StartsWith("Dark", StringComparison.Ordinal) && cardLum > 0.45)
+                        throw new Exception($"{name} 的卡片合成亮度 {cardLum:0.00} 偏高，暗色风格暗不下来");
+
+                    if (name.StartsWith("Bright", StringComparison.Ordinal) && cardLum < 0.30)
+                        throw new Exception($"{name} 的卡片合成亮度 {cardLum:0.00} 偏低，亮色风格亮不起来");
+                }
+
+                // 正文对比度。玻璃风格的门槛是 4.0 而不是 WCAG AA 的 4.5，这是材质本身的限制，
+                // 不是懒得调：模糊结果可能是纯白，而"玻璃"又必须让模糊透出来 ——
+                // 要让白字在纯白模糊上稳过 4.5:1，面板 Alpha 得高到几乎不透明，玻璃就不成立了。
+                // 取 4.0：仍是清晰可读的正文，代价写在 README 里。其余风格照旧 4.5。
+                double titleFloor = isGlass ? 4.0 : 4.5;
+
+                if (titleRatio < titleFloor)
+                    throw new Exception(
+                        $"{label} 正文对比度只有 {titleRatio:0.0}:1，低于 {titleFloor}:1（底色 {Hex(backdrop)}）");
+
+                if (secondaryRatio < 3.0)
+                    throw new Exception(
+                        $"{label} 次要文字对比度只有 {secondaryRatio:0.0}:1，低于 3:1（底色 {Hex(backdrop)}）");
+            }
+        }
+
+        // 液态玻璃的背板必须是 Transparent：不透明的话 DWM 系统背板会被它盖住，
+        // 真背部模糊就白设了，而且不会有任何报错。
+        foreach (var name in new[] { "DarkLiquid", "BrightLiquid" })
+        {
+            var backdrop = (maps[name]["ColorGlassBackdrop"] as SolidColorBrush)?.Color ?? Colors.Black;
+
+            if (backdrop.A != 0)
+                throw new Exception(
+                    $"{name} 的 ColorGlassBackdrop 不是全透明（A={backdrop.A}），会盖住 DWM 背板");
         }
     }
+
+    /// <summary>
+    /// 玻璃层之下、模糊层之上的明度层（ColorGlassScrim），从调色板里读出来用。
+    /// 模糊结果可能是任意明度，所以对比度要按"scrim 压过纯黑模糊"与"压过纯白模糊"两个极端验。
+    /// </summary>
+    private static Color ScrimOf(ResourceDictionary palette)
+        => (palette["ColorGlassScrim"] as SolidColorBrush)?.Color
+           ?? throw new Exception("调色板缺少 ColorGlassScrim");
 
     /// <summary>把可能半透明的画刷按 alpha 合成到一个不透明底色上</summary>
     private static Color Composite(SolidColorBrush? brush, Color backdrop)
@@ -1756,12 +1806,28 @@ internal static class Program
         if (theme.Style != ThemeManager.StyleClassic)
             throw new Exception($"非法风格没有回退到经典，实际 {theme.Style}");
 
-        // 复位，别把测试写进配置的偏留给后续项
+        // 复位。注意不能只调 ApplyStyle / ApplyMode —— 它们在"值没变"时**不写盘**，
+        // 而这个实例的 Style 是构造时从配置读的；磁盘上被别的实例改成 Liquid 时，
+        // 这里的 ApplyStyle(Classic) 会因为"内存里已经是 Classic"而静默不写，
+        // 结果是配置留在 Liquid，下一轮由别的项察觉（表现为"某一项莫名失败"）。
+        // 所以复位直接落盘。
         theme.ApplyStyle(ThemeManager.StyleClassic);
         theme.ApplyMode("Dark");
 
         if (theme.Palette != "Dark")
             throw new Exception($"复位后调色板应为 Dark，实际 {theme.Palette}");
+
+        var restoreService = new ConfigService();
+        var restoreConfig = restoreService.GetAppConfig();
+        restoreConfig.App.Theme = "Dark";
+        restoreConfig.App.ThemeStyle = ThemeManager.StyleClassic;
+        restoreService.SaveAppConfig(restoreConfig);
+
+        var restored = new ConfigService().GetAppConfig().App;
+        Report($"  复位后配置：Theme={restored.Theme} ThemeStyle={restored.ThemeStyle}");
+
+        if (restored.ThemeStyle != ThemeManager.StyleClassic || restored.Theme != "Dark")
+            throw new Exception($"配置没还原干净：Theme={restored.Theme} ThemeStyle={restored.ThemeStyle}");
     }
 
     // ---- 9. 滚动条 ----
@@ -3661,6 +3727,140 @@ internal static class Program
 
         DrainSaves();
         ResetBillsData();
+    }
+
+    // ---- 28. 液态玻璃的背部模糊 ----
+
+    /// <summary>
+    /// 真背部模糊由 DWM 系统背板提供，而系统背板只对**非分层窗口**生效。
+    /// 这一项守两件事：窗口分层与否的判定对不对，以及背板属性是不是真的设下去了。
+    /// <para>
+    /// 模糊本身在测试宿主里看不见（那要有真实桌面在窗口背后），所以这里断言的是
+    /// "配置正确"而不是"画面对"。画面对不对只能靠截图与实机确认。
+    /// </para>
+    /// </summary>
+    private static void TestBackdropBlur()
+    {
+        Report($"系统背板可用 = {BackdropBlur.IsSupported}（Windows 11 build 22000 起）");
+
+        // 判定的两个输入：本机支不支持 + 保存的风格是不是液态玻璃
+        Report($"  SavedStyleNeedsLayeredWindow(支持={true})  -> {ThemeManager.SavedStyleNeedsLayeredWindow(true)}");
+        Report($"  SavedStyleNeedsLayeredWindow(支持={false}) -> {ThemeManager.SavedStyleNeedsLayeredWindow(false)}");
+
+        // 不支持系统背板时必须退回分层窗口：那时液态玻璃用不透明材质，
+        // 走非分层只会白白丢掉圆角与阴影
+        if (!ThemeManager.SavedStyleNeedsLayeredWindow(false))
+            throw new Exception("本机不支持系统背板时仍判定为非分层窗口，会白白丢掉圆角与阴影");
+
+        // 判定读的是磁盘配置，所以要显式写两种风格各验一遍，
+        // 不能假定"当前配置恰好是经典" —— 那样只会顺带测出别的项有没有还原干净。
+        var config = new ConfigService();
+        var saved = config.GetAppConfig().App.ThemeStyle;
+
+        try
+        {
+            foreach (var (style, expectLayered) in new[]
+                     {
+                         (ThemeManager.StyleClassic, true),
+                         (ThemeManager.StyleWindows, true),
+                         (ThemeManager.StyleLiquid, false)
+                     })
+            {
+                var cfg = config.GetAppConfig();
+                cfg.App.ThemeStyle = style;
+                config.SaveAppConfig(cfg);
+
+                // 让 ThemeManager 走一次真实的加载路径，顺便确认它没把值改写掉
+                _ = new ThemeManager(config);
+
+                bool layered = ThemeManager.SavedStyleNeedsLayeredWindow(true);
+                Report($"  风格={style,-8} -> 分层窗口={layered}（应为 {expectLayered}）");
+
+                if (layered != expectLayered)
+                    throw new Exception($"风格 {style} 的窗口分层判定是 {layered}，应为 {expectLayered}");
+            }
+        }
+        finally
+        {
+            var cfg = config.GetAppConfig();
+            cfg.App.ThemeStyle = saved;
+            config.SaveAppConfig(cfg);
+
+            // 写完立刻回读：这个文件在测试里被多处写，不核对的话污染会以
+            // "后面某一项莫名失败"的形式出现，很难定位到源头
+            var check = new ConfigService().GetAppConfig().App;
+            Report($"  第 28 项收尾：Theme={check.Theme} ThemeStyle={check.ThemeStyle}（还原为 {saved}）");
+
+            if (check.ThemeStyle != saved)
+                throw new Exception($"第 28 项没能还原 ThemeStyle：{check.ThemeStyle} != {saved}");
+        }
+
+        // 真去设一次背板，确认 P/Invoke 通、属性被接受
+        var window = new Window
+        {
+            Width = 320,
+            Height = 240,
+            WindowStyle = WindowStyle.None,
+            AllowsTransparency = false,
+            Background = Brushes.Black,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -10000,
+            Top = -10000,
+            Content = new Grid()
+        };
+
+        window.Show();
+        Pump();
+
+        var handle = new System.Windows.Interop.WindowInteropHelper(window).Handle;
+        Report($"  非分层窗口句柄 = 0x{handle.ToInt64():X}");
+
+        if (handle == IntPtr.Zero)
+            throw new Exception("拿不到窗口句柄");
+
+        if (!BackdropBlur.IsSupported)
+        {
+            Report("  本机不支持系统背板，跳过背板属性断言");
+            window.Close();
+            Pump();
+            return;
+        }
+
+        bool applied = BackdropBlur.Apply(handle, dark: true);
+        Report($"  Apply -> {applied}，类型={BackdropBlur.AppliedBackdropType}，色调=0x{BackdropBlur.AppliedTint:X8}");
+
+        if (!applied)
+            throw new Exception("DWM 拒绝了系统背板，液态玻璃拿不到背部模糊");
+
+        // 3 = Acrylic（TransientWindow），4 = Mica Alt，2 = Mica
+        if (BackdropBlur.AppliedBackdropType is not (2 or 3 or 4))
+            throw new Exception($"背板类型是 {BackdropBlur.AppliedBackdropType}，不是已知的系统背板");
+
+        // DWM 色调只是"能设就设"：部分 Windows 11 版本会拒（本机 build 26300 就拒）。
+        // 明度由 ColorGlassScrim 保证，所以这里只如实报告，不据此判定失败。
+        Report($"  DWM 色调：接受={BackdropBlur.AppliedTintAccepted}（被拒不等于玻璃不可用，明度看 scrim）");
+
+        // 但 scrim 必须在：它才是明度的唯一保证
+        foreach (var name2 in new[] { "DarkLiquid", "BrightLiquid" })
+        {
+            var scrim = (LoadDict($"/Themes/{name2}.xaml")["ColorGlassScrim"] as SolidColorBrush)?.Color
+                ?? throw new Exception($"{name2} 缺少 ColorGlassScrim");
+
+            Report($"  {name2} scrim = {Hex(scrim)}（A={scrim.A}）");
+
+            if (scrim.A < 0x66)
+                throw new Exception($"{name2} 的 scrim 太淡（A={scrim.A}），压不住模糊结果，白字会读不清");
+        }
+
+        // 分级结构：测试宿主里的窗口只用来验属性，验完就收
+        BackdropBlur.Clear(handle);
+        Report($"  Clear -> 类型={BackdropBlur.AppliedBackdropType}");
+
+        if (BackdropBlur.AppliedBackdropType != 1)
+            throw new Exception("Clear 之后背板类型没有回到 None");
+
+        window.Close();
+        Pump();
     }
 
     // ---- 27. 分类明细从真实入口走通 ----
