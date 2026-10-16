@@ -102,6 +102,26 @@ $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 
 安装项目引用的是 **PublishItems**（发布产物）而不是主输出：VS 安装项目对 .NET Core 项目的主输出只能取到 `PaperCoin.dll` 与 `runtimeconfig.json`，会漏掉 exe 和全部依赖 DLL。因此**必须先 `dotnet publish`**，否则安装包内容不完整。
 
+#### 两个踩过的坑
+
+**一、`dotnet publish` 之后要立刻打包，中间不能再 `dotnet build`。** `publish` 目录会被后续的普通构建覆盖成"中间产物"，而 MSI 打的就是那一刻的 `publish` 目录。曾经出现过：`publish`（好的）→ 再构建一次（坏的，见下条）→ 打包，结果装出来的程序一启动就崩。
+
+**二、`devenv` 增量构建可能复用上一次失败构建残留的 `*.g.cs`。** 会出现"源码没问题、编译产物里却多出一个重名"的情况：`MainWindow` 里 `GlassBackdrop` 注册了两遍，程序一启动就 `XamlParseException`。**构建日志里会有 `CS0102` 或 `CS5001` 之类的报错，不能当噪音翻过去。** 遇到就先删 `PaperCoin/obj/Release` 与 `PaperCoin/bin/Release` 再重来。
+
+发布前跑一遍下面这段，从 MSI 里把 exe 抽出来实际启动一次。版本号对不代表能跑：
+
+```powershell
+$test = Join-Path $env:TEMP 'pc-extract'
+Remove-Item $test -Recurse -Force -ErrorAction SilentlyContinue
+Start-Process msiexec -ArgumentList "/a","`"PaperCoin.Setup\Release\PaperCoin.msi`"","/qn","TARGETDIR=`"$test`"" -Wait
+
+$exe = Get-ChildItem $test -Recurse -Filter PaperCoin.exe | Select-Object -First 1
+$p = Start-Process $exe.FullName -PassThru
+if (-not $p.WaitForExit(10000)) { "OK：起来了"; $p.Kill() } else { "崩了，退出码 $($p.ExitCode)" }
+```
+
+冒烟测试第 30 项会在源码层面挡住"同一名字范围内重名"这一类，但它挡不住陈旧生成物；上面这段才是最后的关口。
+
 ### 版本号
 
 产品版本只有一个来源：根目录 `Directory.Build.props` 的 `<Version>`。三个自有程序集都从这里取，`Constants.AppVersion` 也改成读程序集版本，不再写字面量。

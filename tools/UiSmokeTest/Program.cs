@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Xml;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Win32;
 using PaperCoin.Controls;
@@ -121,6 +122,7 @@ internal static class Program
             failures += Check("27. 分类明细从真实入口走通", TestCategoryDetailEndToEnd);
             failures += Check("28. 液态玻璃的背部模糊接对了", TestBackdropBlur);
             failures += Check("29. 三个入口都能看分类明细", TestCategoryEntryPoints);
+            failures += Check("30. 每个 XAML 里同一名字范围不重名", TestNoDuplicateNamesInScope);
         });
 
         Console.WriteLine();
@@ -3728,6 +3730,135 @@ internal static class Program
 
         DrainSaves();
         ResetBillsData();
+    }
+
+    // ---- 30. 同一名字范围内不重名 ----
+
+    /// <summary>
+    /// 一个 XAML 文件里，**同一个名字范围**内不允许出现两个同名的 x:Name。
+    /// <para>
+    /// 这一条守的是一个真实事故：某次构建复用了上一次失败构建残留的 <c>*.g.cs</c>，
+    /// 编出来的 MainWindow 里 <c>GlassBackdrop</c> 注册了两遍，程序一启动就
+    /// <c>XamlParseException</c> —— 而全部单元测试与截图测试都是绿的，因为它们
+    /// 从不构造 <c>Application</c>，走的不是"点图标启动"那条路径。安装包装出来才发现。
+    /// </para>
+    /// <para>
+    /// 直接做 XAML 解析测不出这件事：WPF 按 URI 缓存 BAML，第二次加载同一文件会复用它
+    /// 已经建好的名字范围，重名不再报错（实测）。所以这里按 XAML 的规则自己走一遍 ——
+    /// 模板（<c>ControlTemplate</c> / <c>DataTemplate</c> / <c>ItemsPanelTemplate</c>）各自
+    /// 是一个独立的名字范围，模板之间可以重名（Controls.xaml 里有 8 个 Bd 就是合法的）。
+    /// </para>
+    /// </summary>
+    private static void TestNoDuplicateNamesInScope()
+    {
+        var root = RepoRoot() ?? throw new Exception("找不到仓库根目录");
+        var files = Directory.GetFiles(Path.Combine(root, "PaperCoin"), "*.xaml", SearchOption.AllDirectories)
+            .Where(f => !f.Contains(@"\obj\") && !f.Contains(@"\bin\"))
+            .OrderBy(f => f, StringComparer.Ordinal)
+            .ToList();
+
+        Report($"扫描 {files.Count} 个 XAML 文件");
+
+        int checkedScopes = 0;
+
+        foreach (var file in files)
+        {
+            var doc = new XmlDocument();
+            doc.Load(file);
+
+            // 外层作为一个名字范围，文档里出现的每个模板各自再开一个
+            var scopes = new List<XmlNode> { doc.DocumentElement! };
+            CollectTemplateNodes(doc.DocumentElement!, scopes);
+
+            foreach (var scope in scopes)
+            {
+                var seen = new Dictionary<string, string>(StringComparer.Ordinal);
+
+                // 模板节点本身**不属于**外层范围：它自己开一个范围，名字从它的子树开始算。
+                // 不排掉的话，Controls.xaml 里那些各自模板内的同名元素会被误判成重名。
+                foreach (var node in ScopeMembersOf(scope))
+                {
+                    string? name = node.Attributes?["Name"]?.Value
+                        ?? node.Attributes?["x:Name"]?.Value;
+
+                    // 命名空间前缀在 XmlDocument 里不走 Attributes["x:Name"]，单独找一遍
+                    name ??= node.Attributes?.Cast<XmlAttribute>()
+                        .FirstOrDefault(a => a.LocalName == "Name" && a.Prefix == "x")?.Value;
+
+                    if (string.IsNullOrEmpty(name)) continue;
+
+                    string line = node is IXmlLineInfo info && info.HasLineInfo()
+                        ? $"第 {info.LineNumber} 行"
+                        : "位置未知";
+
+                    if (seen.TryGetValue(name, out var first))
+                    {
+                        throw new Exception(
+                            $"{Path.GetFileName(file)} 的同一个名字范围内，" +
+                            $"名称 '{name}' 注册了两遍（{first} 与 {line}）。" +
+                            "这会让 XAML 在加载时抛 XamlParseException，程序一启动就崩");
+                    }
+
+                    seen[name] = line;
+                }
+
+                checkedScopes++;
+            }
+        }
+
+        Report($"检查了 {checkedScopes} 个名字范围，没有重名");
+    }
+
+    /// <summary>收集文档里所有会新开名字范围的模板节点</summary>
+    private static void CollectTemplateNodes(XmlNode node, List<XmlNode> into)
+    {
+        foreach (var child in DescendantsOf(node))
+        {
+            if (child.LocalName is "ControlTemplate" or "DataTemplate" or "ItemsPanelTemplate")
+                into.Add(child);
+
+            CollectTemplateNodes(child, into);
+        }
+    }
+
+    /// <summary>
+    /// 取该名字范围的成员：递归所有子孙，但**不越过模板边界** ——
+    /// 模板会另开一个名字范围，它的子孙不算在当前范围里。
+    /// </summary>
+    private static IEnumerable<XmlNode> ScopeMembersOf(XmlNode node)
+    {
+        foreach (var child in DescendantsOf(node, stopAtTemplates: true))
+            yield return child;
+    }
+
+    /// <summary>递归取所有子孙元素</summary>
+    private static IEnumerable<XmlNode> DescendantsOf(XmlNode node, bool stopAtTemplates = false)
+    {
+        foreach (XmlNode child in node.ChildNodes)
+        {
+            if (child.NodeType != XmlNodeType.Element) continue;
+
+            yield return child;
+
+            // 模板自己开范围，这里不再往里走
+            if (stopAtTemplates && child.LocalName is "ControlTemplate" or "DataTemplate" or "ItemsPanelTemplate")
+                continue;
+
+            foreach (var deeper in DescendantsOf(child, stopAtTemplates)) yield return deeper;
+        }
+    }
+
+    /// <summary>旧的递归版本（保留给模板收集用）</summary>
+    private static IEnumerable<XmlNode> AllDescendantsOf(XmlNode node)
+    {
+        foreach (XmlNode child in node.ChildNodes)
+        {
+            if (child.NodeType != XmlNodeType.Element) continue;
+
+            yield return child;
+
+            foreach (var deeper in DescendantsOf(child)) yield return deeper;
+        }
     }
 
     // ---- 29. 分类明细的三个入口 ----

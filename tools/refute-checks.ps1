@@ -82,6 +82,13 @@ $cases = @(
     },
 
     @{
+        Name = '同一个名字范围内出现重名（启动即崩）'
+        File = 'PaperCoin\MainWindow.xaml'
+        From = '        <Border x:Name="GlassScrim" Grid.RowSpan="2"'
+        To   = '        <Border x:Name="GlassBackdrop" Grid.RowSpan="2"'
+        Test = '30.'
+    },
+    @{
         Name = '下拉框绑回 OneWay（选了没反应）'
         File = 'PaperCoin\Views\Statistics.xaml'
         From = 'SelectedItem="{Binding SelectedCategory, Mode=TwoWay}"'
