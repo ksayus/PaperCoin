@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -109,6 +109,8 @@ public partial class CalenderBillViewModel : ObservableObject
         ShowYearCommand = new RelayCommand(() => SetMode(CalendarViewMode.Year));
         SelectDayCommand = new RelayCommand<CalendarCell>(SelectDay);
         AddCommand = new RelayCommand(OpenEditor, () => !Editor.IsOpen);
+        EditCommand = new RelayCommand<BillEntry>(OpenEditorFor);
+        RemoveCommand = new RelayCommand<BillEntry>(Remove);
 
         _ = RefreshAsync();
     }
@@ -126,8 +128,14 @@ public partial class CalenderBillViewModel : ObservableObject
     public ICommand ShowYearCommand { get; }
     public ICommand SelectDayCommand { get; }
 
-    /// <summary>日视图右下角的新增按钮</summary>
+    /// <summary>右下角的新增按钮</summary>
     public ICommand AddCommand { get; }
+
+    /// <summary>点明细卡片：改这一笔</summary>
+    public ICommand EditCommand { get; }
+
+    /// <summary>点明细卡片上的删除按钮：删这一笔</summary>
+    public ICommand RemoveCommand { get; }
 
     // ---- 编辑面板 ----
 
@@ -146,10 +154,90 @@ public partial class CalenderBillViewModel : ObservableObject
 
     public bool HasNotice => !string.IsNullOrEmpty(Notice);
 
+    /// <summary>
+    /// 测试入口：把定位直接跳到某一天，并刷新。
+    /// 翻页命令只能按月 / 年走，"当天是否落在当前范围里"这类分支用翻页很难精确构造。
+    /// </summary>
+    internal async Task GoToForTestAsync(DateOnly date)
+    {
+        _anchor = date;
+        _selectedDate = date;
+
+        await UiThread.RunAsync(RefreshAsync);
+    }
+
     private void OpenEditor()
     {
         Notice = "";
-        Editor.OpenForCreate(_anchor);
+        Editor.OpenForCreate(DraftDate);
+    }
+
+    /// <summary>
+    /// 新增时的默认日期。三种粒度下都要有唯一答案，右下角的 + 才能一直可用。
+    /// <list type="bullet">
+    /// <item>日视图：就是当前定位的那一天。</item>
+    /// <item>月 / 年视图：当天落在当前范围内就用当天，否则用范围的起始日。
+    /// 用"起始日"而不是"定位日"是因为 <see cref="_anchor"/> 在月视图下可能被
+    /// <see cref="SelectDay"/> 改成别的月份的日子，那不是用户此刻在看的范围。</item>
+    /// </list>
+    /// </summary>
+    private DateOnly DraftDate
+    {
+        get
+        {
+            if (Mode == CalendarViewMode.Day) return _anchor;
+
+            var today = DateOnly.FromDateTime(DateTime.Today);
+
+            return Mode switch
+            {
+                CalendarViewMode.Month =>
+                    today.Year == _anchor.Year && today.Month == _anchor.Month
+                        ? today
+                        : new DateOnly(_anchor.Year, _anchor.Month, 1),
+                _ => today.Year == _anchor.Year ? today : new DateOnly(_anchor.Year, 1, 1)
+            };
+        }
+    }
+
+    /// <summary>编辑某一笔。面板的日期会跟着这条记录走，改完由 <see cref="OnEntrySaved"/> 刷新本页。</summary>
+    private void OpenEditorFor(BillEntry? entry)
+    {
+        if (entry is null) return;
+
+        Notice = "";
+        Editor.OpenForEdit(entry);
+    }
+
+    /// <summary>
+    /// 删除某一笔。界面先移除该行，再落盘；失败时把列表整体重载回真实状态，
+    /// 免得界面显示"已经删了"而磁盘上还在。
+    /// </summary>
+    private async void Remove(BillEntry? entry)
+    {
+        if (entry is null) return;
+
+        Notice = "";
+
+        // 按 Id 定位后移除，不依赖引用相等
+        var target = Entries.FirstOrDefault(e => e.Id == entry.Id);
+        if (target is not null) Entries.Remove(target);
+
+        RefreshTotals();
+
+        bool ok = await _repository.DeleteEntryAsync(entry.Date, entry.Id);
+
+        if (!ok)
+        {
+            Notice = "删除失败，请检查磁盘权限或空间";
+
+            await UiThread.RunAsync(RefreshAsync);
+            return;
+        }
+
+        // 月 / 年视图下格子与月份的合计是从条目算出来的，删一条要重算，
+        // 不然被删的那笔还留在格子金额里
+        await UiThread.RunAsync(RefreshAsync);
     }
 
     /// <summary>

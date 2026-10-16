@@ -38,6 +38,12 @@ public partial class CalenderBill : UserControl
     /// </summary>
     internal const double MaxHoverScale = EntryHoverScale;
 
+    /// <summary>按下时的压缩量。与今日页的 RowPressScale 取同一个值，两页手感才一致。</summary>
+    private const double EntryPressScale = 0.97;
+
+    /// <summary>抬起回弹的峰值。与今日页的 RowReleasePeak 取同一个值。</summary>
+    private const double EntryReleasePeak = 1.04;
+
     // ---- 空状态提示 ----
 
     /// <summary>空状态提示的起始上浮距离，与明细列表入场的位移同一节奏</summary>
@@ -262,12 +268,98 @@ public partial class CalenderBill : UserControl
     /// <summary>明细卡片的悬浮：与月卡片共用同一个缩放原语，幅度更小</summary>
     private void EntryCard_MouseEnter(object sender, MouseEventArgs e)
     {
-        AnimateScale(sender, EntryHoverScale, Motion.Fast);
+        AnimatePress(sender, EntryHoverScale);
     }
 
     private void EntryCard_MouseLeave(object sender, MouseEventArgs e)
     {
-        AnimateScale(sender, 1.0, Motion.Fast);
+        AnimatePress(sender, 1.0);
+    }
+
+    /// <summary>是否有明细卡片正处于按下状态。抬起时才触发编辑，避免拖动也算点击。</summary>
+    private bool _entryPressed;
+
+    // ---- 明细卡片的点击（编辑）----
+
+    /// <summary>按下：立刻压缩</summary>
+    private void EntryCard_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        // e 可能是 null：测试直接驱动这个处理函数，拿来代替合成鼠标事件
+        if (IsInsideButton(e?.OriginalSource as DependencyObject)) return;
+        if (sender is not FrameworkElement fe || fe.RenderTransform is not TransformGroup group) return;
+        if (group.Children[0] is not ScaleTransform scale) return;
+        if (group.Children[1] is not TranslateTransform shift) return;
+
+        _entryPressed = true;
+
+        LA.Builder().Ease(Motion.EaseBoth)
+            .Scale(scale, EntryPressScale, Motion.Fast)
+            .Move(shift, 0, 1, Motion.Fast)
+            .Play();
+    }
+
+    /// <summary>
+    /// 抬起：回弹并打开编辑面板。
+    /// 整个卡片都是编辑热区；删除按钮会在自己的点击里把事件标记为已处理，不会走到这里。
+    /// </summary>
+    private void EntryCard_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_entryPressed) return;
+        _entryPressed = false;
+
+        if (sender is not FrameworkElement fe || fe.RenderTransform is not TransformGroup group) return;
+        if (group.Children[0] is not ScaleTransform scale) return;
+        if (group.Children[1] is not TranslateTransform shift) return;
+
+        // 落点不在本卡片上（按下后拖了出去）就只还原，不触发编辑
+        if (!fe.IsMouseOver)
+        {
+            LA.Builder().Ease(Motion.EaseIn)
+                .Scale(scale, 1.0, Motion.Fast)
+                .Move(shift, 0, 0, Motion.Fast)
+                .Play();
+            return;
+        }
+
+        ReleaseEntryCard(fe, scale, shift);
+    }
+
+    /// <summary>抬起时真正要做的事：回弹 + 打开编辑面板。测试走的是同一段。</summary>
+    private void ReleaseEntryCard(FrameworkElement fe, ScaleTransform scale, TranslateTransform shift)
+    {
+        Motion.PlayElastic(scale, EntryReleasePeak);
+
+        LA.Builder().Ease(Motion.EaseBoth)
+            .Move(shift, 0, 0, Motion.Normal)
+            .Play();
+
+        if (Vm?.EditCommand.CanExecute(fe.DataContext) == true)
+            Vm.EditCommand.Execute(fe.DataContext);
+    }
+
+    /// <summary>测试入口：跳过 IsMouseOver 判断，直接走"抬起落在卡片内"的分支</summary>
+    private void EntryCard_PreviewMouseLeftButtonUpForTest(FrameworkElement fe)
+    {
+        if (fe.RenderTransform is not TransformGroup group) return;
+        if (group.Children[0] is not ScaleTransform scale) return;
+        if (group.Children[1] is not TranslateTransform shift) return;
+
+        ReleaseEntryCard(fe, scale, shift);
+    }
+
+    /// <summary>判断事件源是否落在某个 Button 内部，用于让删除按钮的点击不触发整行动效与编辑。</summary>
+    private static bool IsInsideButton(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is ButtonBase) return true;
+
+            source = source is Visual or System.Windows.Media.Media3D.Visual3D
+                ? VisualTreeHelper.GetParent(source)
+                : null;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -280,6 +372,27 @@ public partial class CalenderBill : UserControl
         else MonthCard_MouseLeave(card, null!);
     }
 
+    /// <summary>
+    /// 直接驱动明细卡片的"按下 + 抬起"。
+    /// 合成鼠标事件能否命中取决于命中测试与元素可见性，失败时分不清是逻辑坏了还是事件没送到，
+    /// 所以这里走与真实事件同一对处理函数，只把"落点在卡片内"这个条件作为参数传进来。
+    /// </summary>
+    internal void PressEntryCardForTest(FrameworkElement card, bool mouseInside)
+    {
+        EntryCard_PreviewMouseLeftButtonDown(card, null!);
+
+        if (mouseInside)
+        {
+            // 抬起处理里会读 IsMouseOver 判断"按下后是否拖了出去"，
+            // 测试宿主里指针不在卡片上，所以这一条由参数代替，直接走成功分支
+            _entryPressed = true;
+            EntryCard_PreviewMouseLeftButtonUpForTest(card);
+            return;
+        }
+
+        EntryCard_PreviewMouseLeftButtonUp(card, null!);
+    }
+
     /// <summary>明细卡片的悬浮入口，与 <see cref="HoverCardForTest"/> 同理，供测试直接驱动</summary>
     internal void HoverEntryCardForTest(FrameworkElement card, bool entering)
     {
@@ -287,7 +400,7 @@ public partial class CalenderBill : UserControl
         else EntryCard_MouseLeave(card, null!);
     }
 
-    /// <summary>取卡片上的 ScaleTransform 并动画到目标值</summary>
+    /// <summary>取卡片上的 ScaleTransform 并动画到目标值（月 / 年卡片用，它们的变换是裸的 ScaleTransform）</summary>
     private static void AnimateScale(object sender, double target, double durationMs)
     {
         if (sender is not FrameworkElement fe) return;
@@ -295,6 +408,21 @@ public partial class CalenderBill : UserControl
 
         LA.Builder().Ease(Motion.EaseIn)
             .Scale(scale, target, durationMs)
+            .Play();
+    }
+
+    /// <summary>
+    /// 明细卡片的缩放。明细卡片的变换是 TransformGroup（缩放 + 按压缩放用的位移），
+    /// 与月 / 年卡片的裸 ScaleTransform 不是一套，所以单独走一个原语。
+    /// </summary>
+    private static void AnimatePress(object sender, double target)
+    {
+        if (sender is not FrameworkElement fe) return;
+        if (fe.RenderTransform is not TransformGroup group) return;
+        if (group.Children[0] is not ScaleTransform scale) return;
+
+        LA.Builder().Ease(Motion.EaseIn)
+            .Scale(scale, target, Motion.Fast)
             .Play();
     }
 

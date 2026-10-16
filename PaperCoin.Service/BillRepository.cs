@@ -249,6 +249,38 @@ public class BillRepository
     }
 
     /// <summary>
+    /// 删除某一天里的**一条**流水，保留同一天的其它记录。它是日历页在月 / 年视图下删除的唯一正确做法：
+    /// 那里列表混了多天，看不到的那几天不能跟着被覆盖掉（<see cref="SaveAsync"/> 是按记录自身日期分组的，
+    /// 用当前列表整片回写会把其它日期的内容当成"这一天就这些"）。
+    /// </summary>
+    /// <param name="date">这条流水所在的日期</param>
+    /// <param name="id">要删的记录 Id</param>
+    /// <returns>是否落盘成功。失败时调用方应当告知用户。</returns>
+    public async Task<bool> DeleteEntryAsync(DateOnly date, Guid id, CancellationToken ct = default)
+    {
+        await _writeGate.WaitAsync(ct);
+        try
+        {
+            await RemoveEntryFromDayAsync(date, id, ct);
+
+            // 索引已在 RemoveEntryFromDayAsync 里同步；这里只推进版本，
+            // 让统计页那类按 Revision 判断"要不要重算"的消费方能察觉
+            _revision++;
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log.Warning(ex, "删除流水失败: {Date}/{Id}", date, id);
+            return false;
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
+    }
+
+    /// <summary>
     /// 新增或编辑一条流水：写入它自身的日期，并保留该日期已有的其它记录。
     /// 编辑时若改了日期（<paramref name="previousDate"/> 与 <see cref="BillEntry.Date"/> 不同），
     /// 再从原日期摘掉这一条。两次磁盘操作在同一次写锁内完成。

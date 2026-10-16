@@ -1,5 +1,6 @@
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Windows.Input;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
@@ -60,6 +61,19 @@ internal static class Program
             return 0;
         }
 
+
+        // 同一时刻只允许一个冒烟进程。测试之间共用 %APPDATA%\PaperCoin\Bills 与同一份
+        // 编译产物，两个进程并发会互相删对方的数据、还会锁住 dll 让构建失败 ——
+        // 后果不是"跑不起来"，而是**给出看起来像功能坏了的假失败**（实测出现过
+        // "应有 3 条实际 8 条"这种）。所以宁可直接拒绝启动。
+        using var exclusive = new Mutex(initiallyOwned: true, @"Local\PaperCoin-UiSmokeTest", out bool isOnlyOne);
+
+        if (!isOnlyOne)
+        {
+            Console.WriteLine("已有另一个冒烟测试在跑（它与我共用同一份账单目录与编译产物），本次拒绝启动。");
+            Console.WriteLine("并发跑只会得到互相污染的结果，请等它结束，或用 --screenshots 之外的模式串行执行。");
+            return 2;
+        }
 
         var app = new Application
         {
@@ -123,6 +137,7 @@ internal static class Program
             failures += Check("28. 液态玻璃的背部模糊接对了", TestBackdropBlur);
             failures += Check("29. 三个入口都能看分类明细", TestCategoryEntryPoints);
             failures += Check("30. 每个 XAML 里同一名字范围不重名", TestNoDuplicateNamesInScope);
+            failures += Check("31. 日历页能改和删账单", TestCalendarEditAndDelete);
         });
 
         Console.WriteLine();
@@ -1443,23 +1458,30 @@ internal static class Program
 
         AssertNoCollapse(view, "CalenderBill(年)");
 
-        // 日视图的 + 号：默认日期应为当前定位（本用例没有翻页，定位就是今天），
-        // 保存后要落到磁盘；月 / 年视图下这个按钮不显示。
-        vm.ShowMonthCommand.Execute(null);
-        Pump();
-
+        // + 号在三种粒度下都显示：默认日期由 CalenderBillViewModel.DraftDate 对每种粒度
+        // 各给一个唯一答案（日=定位日；月 / 年=当天落在范围内就用当天，否则范围起始日），
+        // 所以"记到哪一天"不再有歧义，按钮不必再藏起来。
         var addBtn = FindField<Button>(view, "AddNewBill")
             ?? throw new Exception("日历页找不到 + 号按钮");
 
-        if (addBtn.Visibility != Visibility.Collapsed)
-            throw new Exception($"月视图下 + 号按钮应当隐藏, 实际 {addBtn.Visibility}");
+        foreach (var (label, setMode) in new (string, ICommand)[]
+                 {
+                     ("日视图", vm.ShowDayCommand),
+                     ("月视图", vm.ShowMonthCommand),
+                     ("年视图", vm.ShowYearCommand)
+                 })
+        {
+            setMode.Execute(null);
+            Pump();
+            Layout(view);
+
+            if (addBtn.Visibility != Visibility.Visible)
+                throw new Exception($"{label}下 + 号按钮应当可见, 实际 {addBtn.Visibility}");
+        }
 
         vm.ShowDayCommand.Execute(null);
         Pump();
         Layout(view);
-
-        if (addBtn.Visibility != Visibility.Visible)
-            throw new Exception($"日视图下 + 号按钮应当可见, 实际 {addBtn.Visibility}");
 
         vm.AddCommand.Execute(null);
         Pump();
@@ -2211,11 +2233,20 @@ internal static class Program
         for (int i = 0; i < pumps; i++) Pump();
     }
 
-    /// <summary>清空整个账单数据目录，保证每轮测试从同一状态开始</summary>
+    /// <summary>
+    /// 清空整个账单数据目录，保证每轮测试从同一状态开始。
+    /// <para>
+    /// 磁盘清掉之后**必须把单例仓库的内存索引也失效掉**：<see cref="BillRepository"/> 注册为
+    /// 单例并被多项测试共用，只删磁盘的话它的索引里还留着上一批数据，后面的项会读到
+    /// 自己没种过的条目（表现为"条数莫名其妙多出来"）。
+    /// </para>
+    /// </summary>
     private static void ResetBillsData()
     {
         var dir = PaperCoin.Core.Constants.BillFolder;
         if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+
+        App.Services?.GetService<BillRepository>()?.InvalidateIndex();
     }
 
     private static void Layout(FrameworkElement element)
@@ -3730,6 +3761,395 @@ internal static class Program
 
         DrainSaves();
         ResetBillsData();
+    }
+
+    // ---- 31. 日历页的增删改 ----
+
+    /// <summary>
+    /// 日历页要像今日页那样能改、能删。三种粒度（日 / 月 / 年）的明细列表是同一个控件，
+    /// 所以三个粒度都要验一遍 —— 月 / 年视图下列表混了多天，删除时最容易出错：
+    /// 用当前列表整片回写会把别的日期一起覆盖掉。
+    /// </summary>
+    private static void TestCalendarEditAndDelete()
+    {
+        DrainSaves();
+        ResetBillsData();
+
+        var repo = App.Services.GetRequiredService<BillRepository>();
+        var today = DateOnly.FromDateTime(DateTime.Today);
+
+        // 四天各一笔：删一天里的一条时，其它天的必须原样还在。
+        // 注意日视图只显示"当天"，所以四个日期都要落在本月 / 本年里才验得到月、年视图。
+        var dates = new[] { today, today.AddDays(-1), today.AddDays(-2), today.AddDays(-3) };
+
+        var seed = new List<PaperCoin.Core.Models.BillEntry>();
+        for (int i = 0; i < dates.Length; i++)
+            seed.Add(Entry(dates[i], $"日历第{i + 1}笔", -(10m + i), "餐饮"));
+
+        // 今天单独多来两笔：日视图只装当天，一条看不出编辑与删除的差别
+        seed.Add(Entry(today, "今天第二笔", -20m, "交通"));
+        seed.Add(Entry(today, "今天第三笔", -30m, "购物"));
+
+        int todayCount = seed.Count(e => e.Date == today);
+
+        WaitFor(seed.GroupBy(e => e.Date).Select(g => repo.SaveAsync(g.ToList())));
+        DrainSaves();
+
+        var vm = new CalenderBillViewModel(repo);
+        var view = new CalenderBill { DataContext = vm };
+
+        Pump();
+        Layout(view);
+        WaitUntil(() => vm.Entries.Count >= dates.Length);
+        Layout(view);
+        for (int i = 0; i < 10; i++) Pump();
+        Layout(view);
+
+        // 日视图只装当天，所以这里比的是"今天有几笔"，不是种子总数
+        if (vm.Entries.Count != todayCount)
+            throw new Exception($"日视图应有 {todayCount} 条（当天的），实际 {vm.Entries.Count}");
+
+        // ---- 改：日视图点卡片走 EditCommand ----
+        var first = vm.Entries[0];
+
+        Report($"[1] 日视图 {vm.Entries.Count} 条（当天），准备改 '{first.Description}'");
+
+        if (!vm.EditCommand.CanExecute(first))
+            throw new Exception("[1] EditCommand 对一条真实流水不可执行");
+
+        vm.EditCommand.Execute(first);
+        Pump();
+
+        if (!vm.Editor.IsOpen)
+            throw new Exception("[1] 点卡片之后编辑面板没有打开");
+
+        if (vm.Editor.DraftDescription != first.Description)
+            throw new Exception(
+                $"[1] 面板没带上这条的数据：草稿='{vm.Editor.DraftDescription}'，应为 '{first.Description}'");
+
+        Report($"[1] 面板已打开，草稿='{vm.Editor.DraftDescription}'，日期={vm.Editor.DraftDate:yyyy-MM-dd}");
+
+        // 改描述与金额后保存
+        vm.Editor.DraftDescription = "日历改过的";
+        vm.Editor.DraftAmountText = "-999";
+        vm.Editor.SaveCommand.Execute(null);
+
+        for (int i = 0; i < 30; i++) Pump();
+        WaitUntil(() => vm.Entries.Any(e => e.Description == "日历改过的"));
+        Layout(view);
+
+        var edited = vm.Entries.FirstOrDefault(e => e.Description == "日历改过的")
+            ?? throw new Exception("[1] 保存后列表里找不到改过的描述");
+
+        Report($"[1] 改完：'{edited.Description}' 金额={edited.Amount}，列表 {vm.Entries.Count} 条");
+
+        if (edited.Amount != -999m)
+            throw new Exception($"[1] 金额没改成：{edited.Amount}");
+
+        if (vm.Entries.Count != todayCount)
+            throw new Exception($"[1] 编辑不该改变条数：{vm.Entries.Count} 应为 {todayCount}");
+
+        // ---- 改：点卡片真的事件路径（按下 + 抬起）----
+        var card = EntryCardOf(view, edited) ?? throw new Exception("[2] 找不到这张卡片的元素");
+        var beforeOpen = vm.Editor.IsOpen;
+
+        view.PressEntryCardForTest(card, mouseInside: true);
+
+        Report($"[2] 按下+抬起之后 面板从 {beforeOpen} 变成 {vm.Editor.IsOpen}");
+
+        if (!vm.Editor.IsOpen)
+            throw new Exception("[2] 卡片上的按下+抬起没有打开编辑面板（真实鼠标路径不通）");
+
+        if (vm.Editor.DraftDescription != "日历改过的")
+            throw new Exception($"[2] 面板草稿不对：'{vm.Editor.DraftDescription}'");
+
+        vm.Editor.Close();
+        Pump();
+
+        // ---- 删：日视图删一条 ----
+        int countBefore = vm.Entries.Count;
+        var toDelete = vm.Entries[0];
+
+        vm.RemoveCommand.Execute(toDelete);
+        for (int i = 0; i < 30; i++) Pump();
+        WaitUntil(() => vm.Entries.Count == countBefore - 1);
+        Layout(view);
+
+        Report($"[3] 日视图删 '{toDelete.Description}'：{countBefore} -> {vm.Entries.Count} 条");
+
+        if (vm.Entries.Count != countBefore - 1)
+            throw new Exception($"[3] 删完条数不对：{vm.Entries.Count}，应为 {countBefore - 1}");
+
+        // 磁盘上也要真的没了
+        var onDisk = WaitForLoadDay(repo, toDelete.Date);
+
+        if (onDisk.Any(e => e.Id == toDelete.Id))
+            throw new Exception("[3] 界面删掉了但磁盘上还在");
+
+        // 别的日期一条都不能少
+        foreach (var d in dates.Where(d => d != toDelete.Date))
+        {
+            var others = WaitForLoadDay(repo, d);
+
+            if (others.Count != 1)
+                throw new Exception($"[3] 删 {toDelete.Date:yyyy-MM-dd} 的流水时把 {d:yyyy-MM-dd} 也弄坏了：" +
+                                    $"{others.Count} 条，应为 1 条");
+        }
+
+        Report("[3] 其它日期未受影响");
+
+        // ---- 删：月视图（列表混多天，最危险的场景）----
+        vm.ShowMonthCommand.Execute(null);
+        for (int i = 0; i < 20; i++) Pump();
+        Layout(view);
+        WaitUntil(() => vm.IsMonthMode);
+
+        int monthBefore = vm.Entries.Count;
+        var monthTarget = vm.Entries.FirstOrDefault(e => e.Date != toDelete.Date)
+            ?? throw new Exception("[4] 月视图里找不到可删的条目");
+
+        Report($"[4] 月视图 {monthBefore} 条（跨 {vm.Entries.Select(e => e.Date).Distinct().Count()} 天），" +
+               $"准备删 '{monthTarget.Description}' @ {monthTarget.Date:yyyy-MM-dd}");
+
+        vm.RemoveCommand.Execute(monthTarget);
+        for (int i = 0; i < 30; i++) Pump();
+        WaitUntil(() => vm.Entries.Count == monthBefore - 1);
+        Layout(view);
+
+        Report($"[4] 月视图删完：{monthBefore} -> {vm.Entries.Count} 条，格子合计={vm.Total}");
+
+        if (vm.Entries.Count != monthBefore - 1)
+            throw new Exception($"[4] 月视图删完条数不对：{vm.Entries.Count}，应为 {monthBefore - 1}");
+
+        var monthDisk = WaitForLoadDay(repo, monthTarget.Date);
+
+        if (monthDisk.Any(e => e.Id == monthTarget.Id))
+            throw new Exception("[4] 月视图删掉了但磁盘上还在");
+
+        // 月视图删除最容易踩的坑：把看不到的日期一起覆盖掉
+        foreach (var d in dates)
+        {
+            if (d == monthTarget.Date || d == toDelete.Date) continue;
+
+            var others = WaitForLoadDay(repo, d);
+
+            if (others.Count != 1)
+                throw new Exception(
+                    $"[4] 月视图删 {monthTarget.Date:yyyy-MM-dd} 的流水时把 {d:yyyy-MM-dd} 也弄坏了：" +
+                    $"{others.Count} 条，应为 1 条（用列表整片回写就会这样）");
+        }
+
+        Report("[4] 月视图删除未波及其它日期");
+
+        // 月视图的格子合计要跟着变，不然被删的那笔还留在格子里
+        var cellSum = vm.Cells.Where(c => c.IsCurrentMonth).Sum(c => c.Total);
+
+        if (cellSum != vm.Total)
+            throw new Exception($"[4] 月视图格子合计 {cellSum} 与明细合计 {vm.Total} 不一致，删完没重算");
+
+        // ---- 年视图也能删 ----
+        vm.ShowYearCommand.Execute(null);
+        for (int i = 0; i < 20; i++) Pump();
+        Layout(view);
+        WaitUntil(() => vm.IsYearMode);
+
+        int yearBefore = vm.Entries.Count;
+
+        if (yearBefore == 0)
+            throw new Exception("[5] 年视图里没有条目");
+
+        var yearTarget = vm.Entries[0];
+
+        vm.RemoveCommand.Execute(yearTarget);
+        for (int i = 0; i < 30; i++) Pump();
+        WaitUntil(() => vm.Entries.Count == yearBefore - 1);
+        Layout(view);
+
+        Report($"[5] 年视图删 '{yearTarget.Description}'：{yearBefore} -> {vm.Entries.Count} 条");
+
+        if (vm.Entries.Count != yearBefore - 1)
+            throw new Exception($"[5] 年视图删完条数不对：{vm.Entries.Count}，应为 {yearBefore - 1}");
+
+        // ---- 新增：三种粒度都要能打开面板且有确定的默认日期 ----
+        foreach (var (mode, setMode) in new (string, ICommand)[]
+                 {
+                     ("日视图", vm.ShowDayCommand),
+                     ("月视图", vm.ShowMonthCommand),
+                     ("年视图", vm.ShowYearCommand)
+                 })
+        {
+            setMode.Execute(null);
+            for (int i = 0; i < 20; i++) Pump();
+            Layout(view);
+
+            if (vm.Editor.IsOpen) vm.Editor.Close();
+            Pump();
+
+            if (!vm.AddCommand.CanExecute(null))
+                throw new Exception($"[6] {mode} 的新增按钮不可执行");
+
+            vm.AddCommand.Execute(null);
+            Pump();
+
+            if (!vm.Editor.IsOpen)
+                throw new Exception($"[6] {mode} 点 + 没有打开面板");
+
+            var draft = vm.Editor.DraftDate;
+
+            Report($"[6] {mode} 新增默认日期 = {draft:yyyy-MM-dd}");
+
+            if (draft is null)
+                throw new Exception($"[6] {mode} 的新增没有默认日期，用户不知道会记到哪一天");
+
+            var d2 = DateOnly.FromDateTime(draft.Value);
+
+            bool inScope = mode switch
+            {
+                "日视图" => d2 == today,
+                "月视图" => d2.Year == today.Year && d2.Month == today.Month,
+                _ => d2.Year == today.Year
+            };
+
+            if (!inScope)
+                throw new Exception($"[6] {mode} 的默认日期 {d2:yyyy-MM-dd} 落在当前范围之外");
+
+            vm.Editor.Close();
+            Pump();
+        }
+
+        // ---- 导航到**别的**月 / 年再新增：默认日期要落在看到的那个范围里 ----
+        // 一直在当月里测是测不出问题的：那时"锚点所在的月"与"今天的月"是同一个，
+        // 用错参照也看不出来。翻走一页才区分得开。
+        vm.ShowMonthCommand.Execute(null);
+        for (int i = 0; i < 20; i++) Pump();
+
+        vm.PreviousCommand.Execute(null);
+        for (int i = 0; i < 30; i++) Pump();
+        Layout(view);
+
+        // 关键：**跳到当天不在的范围**去。原地翻一个月时"锚点所在的月"与"今天的月"只差一个月，
+        // 任何"返回锚点"的实现都仍在范围内，断言区分不出对错。
+        // 跳到两年多前，两种实现的结果就分开了：对的是 2024-01-01，错的是今天。
+        var farMonth = DateOnly.FromDateTime(DateTime.Today).AddMonths(-20);
+        vm.GoToForTestAsync(farMonth).GetAwaiter().GetResult();
+        for (int i = 0; i < 20; i++) Pump();
+        Layout(view);
+
+        var otherMonth = farMonth;
+
+        Report($"[8] 跳到 {vm.PeriodTitle}（当天是 {DateTime.Today:yyyy-MM}，不在这个范围里）");
+        Report($"[8] 当前定位 = {otherMonth:yyyy-MM}");
+
+        if (vm.Editor.IsOpen) vm.Editor.Close();
+        vm.AddCommand.Execute(null);
+        Pump();
+
+        var draftMonth = vm.Editor.DraftDate is { } dm ? DateOnly.FromDateTime(dm) : (DateOnly?)null;
+
+        Report($"[8] 在 {otherMonth:yyyy-MM} 里新增，默认日期 = {draftMonth:yyyy-MM-dd}");
+
+        if (draftMonth is null)
+            throw new Exception("[8] 月视图新增没有默认日期");
+
+        if (draftMonth.Value.Year != otherMonth.Year || draftMonth.Value.Month != otherMonth.Month)
+            throw new Exception(
+                $"[8] 月视图的默认日期 {draftMonth:yyyy-MM-dd} 没落在用户正在看的 {otherMonth:yyyy-MM} 里，" +
+                "而是用了今天所在的月 —— 保存下去会记到看不见的地方");
+
+        // 当天不在这个月里，回退值应当是**这个月的 1 号**，不是锚点那一天
+        if (draftMonth.Value.Day != 1)
+            throw new Exception(
+                $"[8] 月视图在当天不属于该月时，默认日期应当是当月 1 号，实际 {draftMonth:yyyy-MM-dd}");
+
+        vm.Editor.Close();
+        Pump();
+
+        // 年视图同理
+        vm.ShowYearCommand.Execute(null);
+        for (int i = 0; i < 20; i++) Pump();
+
+        DateOnly farYear = new(DateTime.Today.Year - 3, 6, 15);
+        vm.GoToForTestAsync(farYear).GetAwaiter().GetResult();
+        for (int i = 0; i < 20; i++) Pump();
+        Layout(view);
+
+        var otherYear = farYear.Year;
+
+        if (vm.Editor.IsOpen) vm.Editor.Close();
+        vm.AddCommand.Execute(null);
+        Pump();
+
+        var draftYear = vm.Editor.DraftDate is { } dy ? DateOnly.FromDateTime(dy) : (DateOnly?)null;
+
+        Report($"[8] 在 {otherYear} 年里新增，默认日期 = {draftYear:yyyy-MM-dd}");
+
+        if (draftYear is null || draftYear.Value.Year != otherYear)
+            throw new Exception(
+                $"[8] 年视图的默认日期 {draftYear:yyyy-MM-dd} 没落在用户正在看的 {otherYear} 年里");
+
+        if (draftYear.Value.Month != 1 || draftYear.Value.Day != 1)
+            throw new Exception(
+                $"[8] 年视图在当天不属于该年时，默认日期应当是 1 月 1 日，实际 {draftYear:yyyy-MM-dd}");
+
+        vm.Editor.Close();
+        Pump();
+
+        // ---- 删空之后列表要干净 ----
+        vm.ShowDayCommand.Execute(null);
+        for (int i = 0; i < 20; i++) Pump();
+        Layout(view);
+
+        while (vm.Entries.Count > 0)
+        {
+            vm.RemoveCommand.Execute(vm.Entries[0]);
+            for (int i = 0; i < 20; i++) Pump();
+        }
+
+        Layout(view);
+
+        Report($"[7] 删空当天：{vm.Entries.Count} 条，IsEmpty={vm.IsEmpty}，合计={vm.Total}");
+
+        if (!vm.IsEmpty || vm.Total != 0)
+            throw new Exception($"[7] 删空之后状态不对：IsEmpty={vm.IsEmpty} 合计={vm.Total}");
+
+        DrainSaves();
+        ResetBillsData();
+    }
+
+    /// <summary>
+    /// 按数据找出某条流水对应的卡片元素。
+    /// 自己递归而不用 CollectVisuals：这个是给"没挂进窗口的独立视图"用的，
+    /// 那种视图走不了需要可视树根的那套收集。
+    /// </summary>
+    private static FrameworkElement? EntryCardOf(DependencyObject root, PaperCoin.Core.Models.BillEntry entry)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+
+            if (child is Border b && b.Name == "EntryCard" && ReferenceEquals(b.DataContext, entry))
+                return b;
+
+            var found = EntryCardOf(child, entry);
+            if (found is not null) return found;
+        }
+
+        return null;
+    }
+
+    /// <summary>载入某一天，等到不再变化</summary>
+    private static IReadOnlyList<PaperCoin.Core.Models.BillEntry> WaitForLoadDay(
+        BillRepository repo, DateOnly date)
+    {
+        IReadOnlyList<PaperCoin.Core.Models.BillEntry> result = [];
+
+        WaitUntil(() =>
+        {
+            result = repo.LoadDayAsync(date).GetAwaiter().GetResult();
+            return true;
+        });
+
+        return result;
     }
 
     // ---- 30. 同一名字范围内不重名 ----

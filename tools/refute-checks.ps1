@@ -82,10 +82,27 @@ $cases = @(
     },
 
     @{
+        Name = '日历页删除不落盘（界面删了磁盘还在）'
+        File = 'PaperCoin\ViewModels\CalenderBillViewModel.cs'
+        From = '        bool ok = await _repository.DeleteEntryAsync(entry.Date, entry.Id);'
+        To   = '        bool ok = true; await Task.CompletedTask;'
+        Test = '31.'
+    },
+    @{
+        Name = '日历页新增的默认日期不看粒度（总用定位日）'
+        File = 'PaperCoin\ViewModels\CalenderBillViewModel.cs'
+        From = '            if (Mode == CalendarViewMode.Day) return _anchor;'
+        To   = '            return _anchor; // 注入：不看粒度，三种视图都用定位日'
+        Test = '31.'
+    },
+    @{
+        # 注入成"模板内重名"而不是"字段重名"：后者编译器会直接报 CS0102（构建失败就会被
+        # 上面的构建检查拦下，测不到第 30 项）。模板里的名字不进类字段，能编过，
+        # 但同属一个 XAML 名字范围，加载时同样会抛 XamlParseException。
         Name = '同一个名字范围内出现重名（启动即崩）'
-        File = 'PaperCoin\MainWindow.xaml'
-        From = '        <Border x:Name="GlassScrim" Grid.RowSpan="2"'
-        To   = '        <Border x:Name="GlassBackdrop" Grid.RowSpan="2"'
+        File = 'PaperCoin\Views\CalenderBill.xaml'
+        From = '                                                    <TranslateTransform x:Name="EntryPressShift" X="0" Y="0"/>'
+        To   = '                                                    <TranslateTransform x:Name="EntryScale" X="0" Y="0"/>'
         Test = '30.'
     },
     @{
@@ -173,8 +190,30 @@ foreach ($case in $cases) {
 
     try {
         Write-Host "[$($case.Name)] 已注入错误，重建并跑测试…"
-        dotnet build tools\UiSmokeTest\UiSmokeTest.csproj -m:1 -v:q --nologo 2>&1 |
-            Select-String 'error' | Select-Object -First 5 | ForEach-Object { '    ' + $_.Line }
+
+        # 构建必须先成功。注入的代码若编不过（锚点改了但 To 里有语法错、枚举名写错等），
+        # 下面那次 --no-build 会拿**上一次的二进制**去跑，于是"没有失败"，
+        # 看起来像断言是摆设 —— 实际是这条反证根本没跑起来。
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = 'dotnet'
+        $psi.Arguments = 'build tools\UiSmokeTest\UiSmokeTest.csproj -m:1 -v:q --nologo'
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.WorkingDirectory = (Get-Location).Path
+
+        $buildProc = [System.Diagnostics.Process]::Start($psi)
+        $buildText = $buildProc.StandardOutput.ReadToEnd()
+        $buildText += $buildProc.StandardError.ReadToEnd()
+        $buildProc.WaitForExit(240000) | Out-Null
+
+        if ($buildProc.ExitCode -ne 0) {
+            Write-Host "  ✘ 注入的代码编不过（退出码 $($buildProc.ExitCode)），这条反证没跑起来 —— 锚点或替换内容有问题"
+            ($buildText -split "`r?`n") | Select-String 'error' | Select-Object -First 3 |
+                ForEach-Object { '      ' + $_.Line.Trim() }
+            $failed += $case.Name
+            continue
+        }
 
         $output = Invoke-Smoke $case.Name
 
