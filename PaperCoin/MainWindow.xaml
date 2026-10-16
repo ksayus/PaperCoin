@@ -29,6 +29,15 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
+        <!-- 玻璃背板：液态玻璃那套材质是半透明的，必须有东西可透。
+             本窗口是 AllowsTransparency（自绘标题栏与圆角需要它），没有系统背板，
+             半透明面板会直接透到桌面 —— 浅色桌面上"暗色玻璃"暗不下来，文字对比度会垮掉。
+             在透明表面下面垫一层随主题走的底色，材质的明暗就与桌面无关了。
+             其它风格这个键是 Transparent，等于不存在。
+             放在 Children 的第一个：Grid 按声明顺序叠放，先声明的在下层。 -->
+        <Border x:Name="GlassBackdrop" Grid.RowSpan="2" CornerRadius="7"
+                Background="{DynamicResource ColorGlassBackdrop}"/>
+
         <!--标题栏-->
         <Border Grid.Row="0" Background="{DynamicResource ColorTitleTop}"
                 CornerRadius="7,7,0,0"

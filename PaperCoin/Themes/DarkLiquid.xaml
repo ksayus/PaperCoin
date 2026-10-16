@@ -1,0 +1,58 @@
+﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- 液态玻璃（暗色）：表面是半透明材质（Color 自带 Alpha），让背板与桌面透出来形成玻璃感；
+         卡片边框用高 Alpha 的白色当发丝高光。
+
+         为什么需要 ColorGlassBackdrop：本程序的窗口是 AllowsTransparency（自绘标题栏与圆角需要它），
+         没有系统绘制的背板。半透明面板如果直接透到桌面，浅色桌面上"暗色玻璃"根本暗不下来 ——
+         实测整幅图最暗亮度会到 120 上下，正文对比度垮掉。加一层不透明背板，这套材质的明暗才与桌面无关。
+
+         深色与亮色的差别比其它风格小：半透明面板本身明度接近，主要区别在背板、文字与分类色。 -->
+    <SolidColorBrush x:Key="ColorGlassBackdrop" Color="#FF14161C"/>
+
+    <!-- 标题栏 -->
+    <SolidColorBrush x:Key="ColorTitleTop" Color="#3DFFFFFF"/>
+    <SolidColorBrush x:Key="ColorSideBar" Color="#2EFFFFFF"/>
+    <SolidColorBrush x:Key="ColorMainContentArea" Color="#1FFFFFFF"/>
+
+    <!-- 卡片 -->
+    <SolidColorBrush x:Key="ColorCardBackground" Color="#29FFFFFF"/>
+    <SolidColorBrush x:Key="ColorCardBorder" Color="#47FFFFFF"/>
+    <SolidColorBrush x:Key="ColorCardActionBackground" Color="#33FFFFFF"/>
+
+    <!-- 按钮 -->
+    <SolidColorBrush x:Key="ColorSideBarBtn" Color="Transparent"/>
+    <SolidColorBrush x:Key="ColorSideBarBtnOver" Color="#29FFFFFF"/>
+    <SolidColorBrush x:Key="ColorSideBarBtnActive" Color="#45FFFFFF"/>
+    <SolidColorBrush x:Key="ColorSideBarBtnPressed" Color="#1FFFFFFF"/>
+    <SolidColorBrush x:Key="ColorAddNewBillBtn" Color="#D93A82F0"/>
+    <SolidColorBrush x:Key="ColorAddNewBillBtnOver" Color="#E64A90F5"/>
+    <SolidColorBrush x:Key="ColorAddNewBillBtnPressed" Color="#CC2F72D8"/>
+
+    <!-- 文字 -->
+    <SolidColorBrush x:Key="ColorTextTitle" Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="ColorTextSecondary" Color="#C7FFFFFF"/>
+
+    <!-- 金额：正数为收入，负数为支出 -->
+    <SolidColorBrush x:Key="ColorPositive" Color="#66E39B"/>
+    <SolidColorBrush x:Key="ColorNegative" Color="#FF8D86"/>
+
+    <!-- 阴影 -->
+    <SolidColorBrush x:Key="ColorShadow" Color="#000000" Opacity="0.42"/>
+    <SolidColorBrush x:Key="ColorWindowShadow" Color="#000000" Opacity="0.30"/>
+
+    <!-- 分类色板：槽位由 Core/CategoryPalette 按分类名求稳定哈希决定，键名不可改 -->
+    <SolidColorBrush x:Key="CategoryColor01" Color="#74B4FF"/>
+    <SolidColorBrush x:Key="CategoryColor02" Color="#CBA6FF"/>
+    <SolidColorBrush x:Key="CategoryColor03" Color="#FF9CBB"/>
+    <SolidColorBrush x:Key="CategoryColor04" Color="#59DED5"/>
+    <SolidColorBrush x:Key="CategoryColor05" Color="#FFC670"/>
+    <SolidColorBrush x:Key="CategoryColor06" Color="#C9E878"/>
+    <SolidColorBrush x:Key="CategoryColor07" Color="#ADA0FF"/>
+    <SolidColorBrush x:Key="CategoryColor08" Color="#6FD4F5"/>
+    <SolidColorBrush x:Key="CategoryColor09" Color="#FFAB84"/>
+    <SolidColorBrush x:Key="CategoryColor10" Color="#8AE7BC"/>
+    <SolidColorBrush x:Key="CategoryColorOther" Color="#B9C6DA"/>
+
+</ResourceDictionary>

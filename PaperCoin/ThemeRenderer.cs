@@ -28,11 +28,15 @@ internal static class ThemeRenderer
     private static readonly IEasingFunction TransitionEasing =
         new CubicEase { EasingMode = EasingMode.EaseOut };
 
-    /// <summary>按主题名装载颜色字典</summary>
-    public static ResourceDictionary LoadTheme(string theme) => new()
+    /// <summary>
+    /// 按调色板名装载颜色字典。名字就是 <c>Themes/</c> 下的文件名
+    /// （<c>Dark</c> / <c>Bright</c> / <c>DarkWindows</c> / <c>BrightLiquid</c> …），
+    /// 由 <see cref="Service.ThemeManager.Palette"/> 给出。
+    /// </summary>
+    public static ResourceDictionary LoadTheme(string palette) => new()
     {
         Source = new Uri(
-            $"/{Constants.AppName};component/Themes/{theme}.xaml",
+            $"/{Constants.AppName};component/Themes/{palette}.xaml",
             UriKind.Relative)
     };
 
@@ -53,7 +57,7 @@ internal static class ThemeRenderer
     /// 字典的冻结尝试会静默失败，画刷因此保持可变。DynamicResource 消费者拿到的就是这些实例，
     /// 整片界面于是跟着一起过渡。
     /// </summary>
-    public static void Apply(string theme)
+    public static void Apply(string palette)
     {
         var merged = Application.Current?.Resources.MergedDictionaries;
         if (merged is null) return;
@@ -64,7 +68,7 @@ internal static class ThemeRenderer
         if (index < 0) return;
 
         var target = merged[index];
-        var incoming = LoadTheme(theme);
+        var incoming = LoadTheme(palette);
 
         foreach (var key in incoming.Keys)
             target[key] = Transitional(target, key, incoming[key]);

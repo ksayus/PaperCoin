@@ -51,11 +51,20 @@ $cases = @(
         To   = '            NavItem.Statistics => SettingsBtn,'
         Test = '3.'
     },    @{
-        Name = '选中分类后不自动滚到明细'
-        File = 'PaperCoin\Views\Statistics.xaml.cs'
-        From = '        if (Vm?.HasCategorySelection != true) return;'
-        To   = '        if (Vm is not null) return;'
-        Test = '24.'
+        Name = '风格不影响调色板（Compose 忽略风格）'
+        File = 'PaperCoin.Service\ThemeManager.cs'
+        From = '            StyleWindows => brightness + StyleWindows,
+            StyleLiquid => brightness + StyleLiquid,'
+        To   = '            StyleWindows => brightness,
+            StyleLiquid => brightness,'
+        Test = '8.'
+    },
+    @{
+        Name = '液态玻璃不给半透明（全用不透明色）'
+        File = 'PaperCoin\Themes\DarkLiquid.xaml'
+        From = '    <SolidColorBrush x:Key="ColorCardBackground" Color="#29FFFFFF"/>'
+        To   = '    <SolidColorBrush x:Key="ColorCardBackground" Color="#FFFFFFFF"/>'
+        Test = '1.'
     },
     @{
         Name = '下拉框选中项文本不给前景色'

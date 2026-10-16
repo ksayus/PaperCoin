@@ -118,6 +118,7 @@ internal static class Program
             failures += Check("24. 统计页接入导航并播放展开动效", TestStatisticsPage);
             failures += Check("25. 统计 CSV 带 BOM", TestStatisticsCsv);
             failures += Check("26. 每次进页面都重播入场动画", TestEntranceReplaysOnEveryEntry);
+            failures += Check("27. 分类明细从真实入口走通", TestCategoryDetailEndToEnd);
         });
 
         Console.WriteLine();
@@ -155,6 +156,61 @@ internal static class Program
         window.Show();
         Pump();
 
+        // 三种风格各截一轮：主题只有肉眼看得出来，断言管不了"材质对不对味"
+        foreach (var (style, palette) in new[]
+                 {
+                     ("Classic", "Dark"),
+                     ("Windows", "DarkWindows"),
+                     ("Liquid", "DarkLiquid")
+                 })
+        {
+            ApplyPaletteForShot(palette);
+            Pump();
+
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                foreach (var page in new[] { "TodayBill", "CalenderBill", "Statistics", "Settings" })
+                {
+                    window.NavigateForTest(page);
+                    Pump();
+
+                    SettleIndicator(window);
+                    Pump();
+                    SettleCharts(window);
+
+                    Shot(window, Path.Combine(directory, $"{style}-{page}.png"), $"{style}/{page}");
+                }
+
+                // 主题与风格那两行在设置页顶部，单独截一张看清楚
+                window.NavigateForTest("Settings");
+                Pump();
+                Shot(window, Path.Combine(directory, $"{style}-Settings.png"), $"{style}/Settings");
+            });
+
+            // 探针：读出主内容区与卡片底色的实际合成结果，确认这套调色板的明暗与预期一致。
+            // 只看画刷的 ARGB 不够 —— 半透明画刷要与窗口底色合成后才知道实际观感。
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                window.NavigateForTest("Statistics");
+                Pump();
+
+                int w = (int)Math.Ceiling(window.ActualWidth);
+                int h = (int)Math.Ceiling(window.ActualHeight);
+
+                // 取左侧导航栏（无卡片覆盖）与卡片内部两处的实际像素
+                var nav = PixelAt(window, w, h, 25, h / 2);
+                var card = PixelAt(window, w, h, w / 2, 120);
+
+                Report($"    {style}: 侧边栏={Hex(nav)} 卡片={Hex(card)}");
+            });
+
+            Report($"风格 {style}（调色板 {palette}）截图完成");
+        }
+
+        // 恢复经典，后面的截图不受影响
+        ApplyPaletteForShot("Dark");
+        Pump();
+
         Application.Current.Dispatcher.Invoke(() =>
         {
             foreach (var page in new[] { "TodayBill", "CalenderBill", "Statistics", "Settings" })
@@ -173,8 +229,7 @@ internal static class Program
                 Shot(window, Path.Combine(directory, $"1-{page}.png"), $"页面 {page}");
                 Report($"  {page}: 指示器 Y={window.IndicatorY:0.#}");
 
-                // 统计页额外截一张"选中某个分类、并滚到分类明细"的：那一块在页面最下面，
-                // 不选中的话截出来只有一句引导语，看不出明细其实没画出来。
+                // 统计页额外截一张"选中某个分类"的，看分类明细区块的实际内容
                 if (window.FindPageForTest(page) is Statistics stats)
                 {
                     stats.ScrollToCategoryDetailForTest();
@@ -212,6 +267,30 @@ internal static class Program
         });
 
         Report($"截图目录: {directory}");
+    }
+
+    /// <summary>
+    /// 截图模式：把当前主题换成指定调色板。
+    /// 走 ThemeRenderer 的原地改写（与运行时切主题同一条路径），而不是替换字典实例 ——
+    /// 替换实例不会让已经解析过的 DynamicResource 重新解析。
+    /// </summary>
+    private static string Hex(Color c) => $"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}";
+
+    private static void ApplyPaletteForShot(string palette)
+    {
+        // 直接把目标画刷写进颜色字典，不经过 ThemeRenderer.Apply 的过渡。
+        // Apply 会挂 300ms 的 ColorAnimation，而截图宿主里时钟不推进 ——
+        // 截到的是过渡的起点（暗色底 + 深色文字），看着像主题没生效。
+        var merged = Application.Current.Resources.MergedDictionaries;
+        var index = PaperCoin.ThemeRenderer.IndexOfColorDictionary(merged);
+        if (index < 0) throw new Exception("找不到颜色字典");
+
+        var target = merged[index];
+        var incoming = PaperCoin.ThemeRenderer.LoadTheme(palette);
+
+        foreach (var key in incoming.Keys) target[key] = incoming[key];
+        foreach (var stale in target.Keys.Cast<object>().Where(k => !incoming.Contains(k)).ToList())
+            target.Remove(stale);
     }
 
     /// <summary>
@@ -271,20 +350,45 @@ internal static class Program
 
     // ---- 1. 资源 ----
 
+    /// <summary>
+    /// 六本调色板字典的 key 必须完全一致。
+    /// <para>
+    /// 主题切换按 key 就地替换条目（见 ThemeRenderer）：某个风格少一个 key，
+    /// 切过去时 <c>DynamicResource</c> 找不到就静默回退，表现是"某个控件颜色不对"
+    /// 且没有任何报错。风格有 3 种、明暗 2 种，组合出 6 本，全都要对齐。
+    /// </para>
+    /// </summary>
     private static void TestResourceKeys()
     {
-        var dark = LoadDict("/Themes/Dark.xaml");
-        var bright = LoadDict("/Themes/Bright.xaml");
+        // 调色板名与 ThemeManager.Compose 的规则一致：经典不带后缀
+        string[] palettes =
+            ["Dark", "Bright", "DarkWindows", "BrightWindows", "DarkLiquid", "BrightLiquid"];
 
-        var dk = dark.Keys.Cast<object>().Select(k => k.ToString()!).ToHashSet();
-        var bk = bright.Keys.Cast<object>().Select(k => k.ToString()!).ToHashSet();
+        var maps = new Dictionary<string, ResourceDictionary>();
+        foreach (var name in palettes)
+            maps[name] = LoadDict($"/Themes/{name}.xaml");
 
-        Report($"Dark keys = {dk.Count}, Bright keys = {bk.Count}");
+        var reference = maps["Dark"].Keys.Cast<object>().Select(k => k.ToString()!).ToHashSet();
+        Report($"调色板基准（Dark）{reference.Count} 个 key");
 
-        var onlyDark = dk.Except(bk).ToList();
-        var onlyBright = bk.Except(dk).ToList();
-        if (onlyDark.Count > 0) throw new Exception("仅 Dark 定义: " + string.Join(", ", onlyDark));
-        if (onlyBright.Count > 0) throw new Exception("仅 Bright 定义: " + string.Join(", ", onlyBright));
+        foreach (var name in palettes)
+        {
+            var keys = maps[name].Keys.Cast<object>().Select(k => k.ToString()!).ToHashSet();
+
+            if (keys.Count != reference.Count)
+                Report($"  {name}: {keys.Count} 个 key");
+
+            var missing = reference.Except(keys).ToList();
+            var extra = keys.Except(reference).ToList();
+
+            if (missing.Count > 0)
+                throw new Exception($"{name} 缺少 key: " + string.Join(", ", missing));
+
+            if (extra.Count > 0)
+                throw new Exception($"{name} 多出 key: " + string.Join(", ", extra));
+        }
+
+        Report($"六个调色板 key 全部对齐（{string.Join(", ", palettes)}）");
 
         foreach (var key in new[]
                  {
@@ -295,8 +399,91 @@ internal static class Program
                      "ColorSideBar", "ColorWindowShadow"
                  })
         {
-            if (!dk.Contains(key)) throw new Exception($"Dark 缺少 key: {key}");
+            if (!reference.Contains(key)) throw new Exception($"Dark 缺少 key: {key}");
         }
+
+        // 液态玻璃的玻璃感全靠半透明，全是 A=FF 就说明这套调色板没做出材质差异
+        foreach (var name in new[] { "DarkLiquid", "BrightLiquid" })
+        {
+            var translucent = maps[name].Keys.Cast<object>()
+                .Select(k => maps[name][k])
+                .OfType<SolidColorBrush>()
+                .Count(b => b.Color.A < 0xFF);
+
+            Report($"  {name}: {translucent} 个半透明画刷");
+
+            if (translucent < 5)
+                throw new Exception($"{name} 只有 {translucent} 个半透明画刷，做不出玻璃材质");
+        }
+
+        // 每套调色板都要能读出字。半透明面板会与背板合成，光看画刷的 ARGB 判断不了可读性，
+        // 必须按合成后的实际颜色算对比度 —— 这一条挡的正是"玻璃面板太透，
+        // 暗色玻璃在浅底上糊成一片"这种只有肉眼才发现的问题。
+        foreach (var name in palettes)
+        {
+            var backdropBrush = maps[name]["ColorGlassBackdrop"] as SolidColorBrush
+                ?? throw new Exception($"{name} 缺少 ColorGlassBackdrop");
+
+            var surface = Composite(maps[name]["ColorMainContentArea"] as SolidColorBrush, backdropBrush.Color);
+            var card = Composite(maps[name]["ColorCardBackground"] as SolidColorBrush, surface);
+            var title = (maps[name]["ColorTextTitle"] as SolidColorBrush)?.Color ?? Colors.Black;
+            var secondary = (maps[name]["ColorTextSecondary"] as SolidColorBrush)?.Color ?? Colors.Black;
+
+            double cardLum = Luminance(card);
+            double titleRatio = Contrast(CompositeOn(title, card), card);
+            double secondaryRatio = Contrast(CompositeOn(secondary, card), card);
+
+            Report($"  {name,-14} 卡片合成={Hex(card)} 亮度={cardLum:0.00} " +
+                   $"正文对比={titleRatio:0.0} 次要对比={secondaryRatio:0.0}");
+
+            // 暗色风格合成后要明显偏暗，亮色风格要明显偏亮，否则主题名不副实
+            if (name.StartsWith("Dark", StringComparison.Ordinal) && cardLum > 0.45)
+                throw new Exception($"{name} 的卡片合成亮度 {cardLum:0.00} 偏高，暗色风格暗不下来");
+
+            if (name.StartsWith("Bright", StringComparison.Ordinal) && cardLum < 0.30)
+                throw new Exception($"{name} 的卡片合成亮度 {cardLum:0.00} 偏低，亮色风格亮不起来");
+
+            // WCAG AA：正文 4.5:1，次要文字 3:1
+            if (titleRatio < 4.5)
+                throw new Exception($"{name} 正文对比度只有 {titleRatio:0.0}:1，低于 4.5:1");
+
+            if (secondaryRatio < 3.0)
+                throw new Exception($"{name} 次要文字对比度只有 {secondaryRatio:0.0}:1，低于 3:1");
+        }
+    }
+
+    /// <summary>把可能半透明的画刷按 alpha 合成到一个不透明底色上</summary>
+    private static Color Composite(SolidColorBrush? brush, Color backdrop)
+        => brush is null ? backdrop : CompositeOn(brush.Color, backdrop);
+
+    /// <summary>src 以自身 alpha 叠加在 dst 上</summary>
+    private static Color CompositeOn(Color src, Color dst)
+    {
+        double a = src.A / 255.0;
+
+        return Color.FromRgb(
+            (byte)Math.Round(src.R * a + dst.R * (1 - a)),
+            (byte)Math.Round(src.G * a + dst.G * (1 - a)),
+            (byte)Math.Round(src.B * a + dst.B * (1 - a)));
+    }
+
+    /// <summary>WCAG 相对亮度</summary>
+    private static double Luminance(Color c)
+    {
+        static double Channel(byte v)
+        {
+            double s = v / 255.0;
+            return s <= 0.03928 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4);
+        }
+
+        return 0.2126 * Channel(c.R) + 0.7152 * Channel(c.G) + 0.0722 * Channel(c.B);
+    }
+
+    /// <summary>WCAG 对比度</summary>
+    private static double Contrast(Color a, Color b)
+    {
+        double la = Luminance(a), lb = Luminance(b);
+        return (Math.Max(la, lb) + 0.05) / (Math.Min(la, lb) + 0.05);
     }
 
     // ---- 2. 图标 ----
@@ -1338,15 +1525,35 @@ internal static class Program
             }
         }
 
-        // 主题分段控件必须能完整排下三个选项
+        // 设置页有两组分段控件：明暗 3 个 + 风格 3 个，共 6 个。
+        // 两组各自独立，GroupName 不能撞 —— 撞了会互相取消选中。
         var segmented = FindAllCore<RadioButton>(view).ToList();
-        Report($"主题分段按钮数 = {segmented.Count}");
-        if (segmented.Count != 3) throw new Exception($"主题应有 3 个选项, 实际 {segmented.Count}");
+        Report($"分段按钮数 = {segmented.Count}");
+
+        if (segmented.Count != 6)
+            throw new Exception($"应有 6 个分段按钮（明暗 3 + 风格 3）, 实际 {segmented.Count}");
+
+        foreach (var group in segmented.GroupBy(r => r.GroupName))
+        {
+            Report($"  GroupName={group.Key} 有 {group.Count()} 项");
+
+            if (group.Count() != 3)
+                throw new Exception($"分组 {group.Key} 应有 3 项, 实际 {group.Count()}");
+        }
+
+        // 两组各自必须恰好选中一个：分组名写错时会出现两组同时选中或都不选中
+        foreach (var group in segmented.GroupBy(r => r.GroupName))
+        {
+            int checkedCount = group.Count(r => r.IsChecked == true);
+
+            if (checkedCount != 1)
+                throw new Exception($"分组 {group.Key} 选中了 {checkedCount} 项, 应当正好 1 项");
+        }
 
         double lastRight = segmented.Max(r => BoundsIn(view, r).Right);
         Report($"  最后一个分段右边界 = {lastRight:0.#}（内容区右边界 {ContentWidth:0.#}）");
         if (lastRight > ContentWidth + 1)
-            throw new Exception($"主题分段控件超出内容区: {lastRight:0.#} > {ContentWidth:0.#}");
+            throw new Exception($"分段控件超出内容区: {lastRight:0.#} > {ContentWidth:0.#}");
 
         var switches = FindAllCore<SwitchToggle>(view).ToList();
         Report($"开关数 = {switches.Count}");
@@ -1498,7 +1705,7 @@ internal static class Program
         foreach (var mode in new[] { "System", "Bright", "Dark", "System" })
         {
             theme.ApplyMode(mode);
-            Report($"  {mode,-7} -> 模式={theme.Mode,-7} 实际={theme.Resolved}");
+            Report($"  {mode,-7} -> 模式={theme.Mode,-7} 实际={theme.Resolved,-7} 调色板={theme.Palette}");
         }
 
         theme.ApplyMode("System");
@@ -1509,6 +1716,52 @@ internal static class Program
         if (theme.Resolved != "Dark") throw new Exception("非法模式没有回退到 Dark");
 
         theme.ApplyMode("Dark");
+
+        // ---- 风格是独立维度：明暗 2 档 × 风格 3 种 = 6 本调色板，全部要能装载 ----
+        string[] styles = [ThemeManager.StyleClassic, ThemeManager.StyleWindows, ThemeManager.StyleLiquid];
+
+        foreach (var brightness in new[] { "Dark", "Bright" })
+        {
+            theme.ApplyMode(brightness);
+
+            foreach (var style in styles)
+            {
+                theme.ApplyStyle(style);
+
+                var expected = style == ThemeManager.StyleClassic ? brightness : brightness + style;
+                Report($"  {brightness,-7} + {style,-8} -> {theme.Palette}");
+
+                if (theme.Palette != expected)
+                    throw new Exception($"{brightness}+{style} 解析成了 {theme.Palette}，应为 {expected}");
+
+                // 名字得真的对应一本字典，装不起来会在切主题那一刻抛异常
+                var dict = LoadDict($"/Themes/{theme.Palette}.xaml");
+                if (!dict.Contains("ColorMainContentArea"))
+                    throw new Exception($"{theme.Palette} 不是一本有效的颜色字典");
+            }
+        }
+
+        // 跟随系统 + 风格：亮度跟着系统走，风格保持不变
+        theme.ApplyMode("System");
+        theme.ApplyStyle(ThemeManager.StyleLiquid);
+        var systemBrightness = ThemeManager.GetSystemTheme();
+
+        if (theme.Palette != systemBrightness + ThemeManager.StyleLiquid)
+            throw new Exception($"跟随系统 + 液态玻璃 解析成了 {theme.Palette}");
+
+        Report($"  跟随系统 + 液态玻璃 -> {theme.Palette}");
+
+        // 非法风格回退到经典
+        theme.ApplyStyle("乱写的风格");
+        if (theme.Style != ThemeManager.StyleClassic)
+            throw new Exception($"非法风格没有回退到经典，实际 {theme.Style}");
+
+        // 复位，别把测试写进配置的偏留给后续项
+        theme.ApplyStyle(ThemeManager.StyleClassic);
+        theme.ApplyMode("Dark");
+
+        if (theme.Palette != "Dark")
+            throw new Exception($"复位后调色板应为 Dark，实际 {theme.Palette}");
     }
 
     // ---- 9. 滚动条 ----
@@ -3410,6 +3663,135 @@ internal static class Program
         ResetBillsData();
     }
 
+    // ---- 27. 分类明细从真实入口走通 ----
+
+    /// <summary>
+    /// 按用户的真实操作路径把分类明细走一遍：进统计页 → 点排行行 → 看明细列表。
+    /// <para>
+    /// 第 24 项是"在已经就绪的页面上驱动命令"，绕开了进场时序；这一项刻意从建窗口开始，
+    /// 每一步都断言，好把"哪一环断了"直接定位出来，而不是只报一个"没有明细"。
+    /// </para>
+    /// </summary>
+    private static void TestCategoryDetailEndToEnd()
+    {
+        DrainSaves();
+        ResetBillsData();
+
+        var repo = App.Services.GetRequiredService<BillRepository>();
+        var expected = SeedStatisticsData(repo, DateOnly.FromDateTime(DateTime.Today));
+
+        var window = new MainWindow
+        {
+            Width = WindowWidth,
+            Height = WindowHeight,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+            Left = -10000,
+            Top = -10000
+        };
+
+        window.Show();
+        Pump();
+
+        // 1. 进统计页
+        window.NavigateForTest("Statistics");
+        Pump();
+        for (int i = 0; i < 10; i++) Pump();
+
+        if (window.FindPageForTest("Statistics") is not Statistics page)
+            throw new Exception("[1] 统计页没挂上");
+
+        if (page.DataContext is not StatisticsViewModel vm)
+            throw new Exception("[1] 统计页 DataContext 不对");
+
+        Report($"[1] 进页面：圆环 {vm.Segments.Count} 段，排行 {vm.RankRows.Count} 行，分类清单 {vm.Categories.Count} 项");
+
+        if (vm.RankRows.Count == 0)
+            throw new Exception("[1] 排行是空的，造的数据没进去");
+
+        // 2. 点排行第一行（走按钮上真正绑定的那个命令，不自己调 VM）
+        var rowButton = page.FindRankRowForTest()
+            ?? throw new Exception("[2] 找不到排行行按钮");
+
+        if (rowButton.Command is null)
+            throw new Exception("[2] 排行行按钮没有绑定命令");
+
+        var label = rowButton.CommandParameter as string
+            ?? throw new Exception("[2] 排行行按钮的参数不是分类名");
+
+        Report($"[2] 点排行行：分类='{label}'，可执行={rowButton.Command.CanExecute(rowButton.CommandParameter)}");
+
+        rowButton.Command.Execute(rowButton.CommandParameter);
+        Pump();
+        for (int i = 0; i < 6; i++) Pump();
+
+        // 3. 选中状态
+        if (vm.SelectedCategory != label)
+            throw new Exception($"[3] 选中没生效：SelectedCategory={vm.SelectedCategory ?? "(null)"}，应为 {label}");
+
+        Report($"[3] 选中生效：{vm.SelectedCategory}，HasCategorySelection={vm.HasCategorySelection}");
+
+        // 4. 明细数据
+        if (vm.CategoryEntries.Count == 0)
+            throw new Exception(
+                $"[4] 明细数据是空的。该分类在全部时间里应当有 " +
+                $"{expected.AllEntryCount} 条里的若干条；检查 AllEntries 有没有被载入");
+
+        Report($"[4] 明细数据：{vm.CategoryEntries.Count} 条 —— {vm.CategorySummaryText}");
+
+        // 5. 明细画到界面上
+        page.UpdateLayout();
+
+        var texts = new List<TextBlock>();
+        CollectVisuals(page, texts);
+
+        var wanted = vm.CategoryEntries.Select(e => e.Description).ToList();
+        var shown = wanted.Where(d => texts.Any(t => t.Text == d)).ToList();
+
+        Report($"[5] 画到界面：{shown.Count}/{wanted.Count} 条 —— {string.Join(", ", shown)}");
+
+        if (shown.Count != wanted.Count)
+            throw new Exception($"[5] 明细没有全部画出来：{shown.Count}/{wanted.Count}");
+
+        // 6. 下拉框也要跟着选中
+        var picker = FindVisualByName<ComboBox>(page, "CategoryPicker")
+            ?? throw new Exception("[6] 找不到分类下拉框");
+
+        if (picker.SelectedItem as string != label)
+            throw new Exception($"[6] 下拉框没跟着选中：{(picker.SelectedItem as string) ?? "(null)"}，应为 {label}");
+
+        Report($"[6] 下拉框选中：{picker.SelectedItem}");
+
+        // 7. 清掉之后明细要收起来
+        vm.ClearCategoryCommand.Execute(null);
+        Pump();
+        page.UpdateLayout();
+
+        if (vm.CategoryEntries.Count != 0)
+            throw new Exception($"[7] 清除后明细数据还在：{vm.CategoryEntries.Count} 条");
+
+        Report("[7] 清除后明细已收起");
+
+        // 8. 从下拉框选另一个分类也要能出明细
+        if (vm.Categories.Count > 1)
+        {
+            var other = vm.Categories[1];
+            vm.ShowCategoryCommand.Execute(other);
+            Pump();
+            page.UpdateLayout();
+
+            if (vm.CategoryEntries.Count == 0)
+                throw new Exception($"[8] 从命令选 '{other}' 之后明细是空的");
+
+            Report($"[8] 换到 '{other}'：{vm.CategoryEntries.Count} 条");
+        }
+
+        window.Close();
+        Pump();
+
+        DrainSaves();
+        ResetBillsData();
+    }
+
     // ---- 23. 圆环几何 ----
 
     /// <summary>
@@ -3711,15 +4093,23 @@ internal static class Program
 
         Report($"分类明细已展开: {current.CategoryDetailTitle}, {current.CategorySummaryText}");
 
-        // 明细在页面最下面。选中后必须自动把它滚进视野 —— 不滚的话用户点完排行
-        // 只觉得"什么都没发生"，内容其实更新了，只是不在屏幕上。
+        // 明细必须落在不需要滚动就能看到的位置。
+        // 它原来排在页面最下面（在排行的下面），点完排行后它其实更新了，
+        // 却在屏幕外，用户只会觉得"点了没反应"。现在它紧跟圆环、排在排行之前。
         Pump();
-        double scrolled = page.ScrollOffsetForTest;
+        page.UpdateLayout();
 
-        Report($"选中后自动滚动位置 = {scrolled:0.#}");
+        double viewportTop = 0;
+        double viewportBottom = page.DetailViewportHeightForTest;
 
-        if (scrolled <= 0)
-            throw new Exception("选中分类后页面没有自动滚到分类明细，那块内容在屏幕外，用户看不到");
+        var detailTop = page.CategoryDetailOffsetForTest;
+
+        Report($"分类明细区块纵坐标 = {detailTop:0.#}，首屏可视高度 = {viewportBottom:0.#}");
+
+        if (detailTop > viewportBottom)
+            throw new Exception(
+                $"分类明细在首屏之外（纵坐标 {detailTop:0.#} > 可视高度 {viewportBottom:0.#}），" +
+                "点完排行看不到它，等于没生效");
 
         current.ClearCategoryCommand.Execute(null);
         Pump();

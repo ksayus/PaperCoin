@@ -135,40 +135,6 @@ public partial class Statistics : UserControl
         AnimateTrendBars();
     }
 
-    /// <summary>
-    /// 选中分类后把"分类明细"滚进视野。
-    /// <para>
-    /// 明细在页面最下面，不滚的话用户点完排行/图例只觉得"什么都没发生" ——
-    /// 内容确实更新了，只是不在屏幕上。滚动放在 DataBind 之后，等明细列表的行生成完，
-    /// 否则量到的可滚动高度还是旧的，滚不到位。
-    /// </para>
-    /// </summary>
-    private void ScrollToCategoryDetail()
-    {
-        if (Vm?.HasCategorySelection != true) return;
-
-        Dispatcher.BeginInvoke(new Action(() =>
-        {
-            DetailScroll.UpdateLayout();
-
-            // 算目标是"让整块刚好露出来"，不是无脑滚到底：
-            // 滚到底会把明细下面那点内容顶上来，用户刚点的排行反而被推走。
-            var origin = DetailSection.TransformToAncestor(DetailScroll)
-                .Transform(new Point(0, 0));
-
-            double current = DetailScroll.VerticalOffset;
-            double viewport = DetailScroll.ViewportHeight;
-            double sectionTop = origin.Y + current;
-            double sectionBottom = sectionTop + DetailSection.ActualHeight;
-
-            // 已经完整可见就不动，避免每次刷新都把用户的滚动位置拽走
-            if (sectionTop >= current && sectionBottom <= current + viewport) return;
-
-            DetailScroll.ScrollToVerticalOffset(
-                Math.Min(sectionBottom - viewport, DetailScroll.ScrollableHeight));
-        }), DispatcherPriority.Loaded);
-    }
-
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         switch (e.PropertyName)
@@ -179,10 +145,7 @@ public partial class Statistics : UserControl
                 Dispatcher.BeginInvoke(new Action(Reveal), DispatcherPriority.Render);
                 break;
 
-            // 选中了分类：把明细滚进视野，否则用户点完不知道发生了什么
-            case nameof(StatisticsViewModel.SelectedCategory):
-                ScrollToCategoryDetail();
-                break;
+
         }
     }
 
@@ -312,13 +275,17 @@ public partial class Statistics : UserControl
         if (!Vm.HasCategorySelection && Vm.Categories.Count > 0)
             Vm.ShowCategoryCommand.Execute(Vm.Categories[0]);
 
-        // 等绑定把明细列表生成出来，再滚到底
+        // 等绑定把明细列表生成出来
         Dispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
         UpdateLayout();
-
-        DetailScroll.ScrollToEnd();
-        UpdateLayout();
     }
+
+    /// <summary>分类明细区块顶端相对滚动视口的纵坐标，供测试断言它不需要滚动就能看到</summary>
+    internal double CategoryDetailOffsetForTest =>
+        DetailSection.TransformToAncestor(DetailScroll).Transform(new Point(0, 0)).Y;
+
+    /// <summary>滚动视口的高度，同上</summary>
+    internal double DetailViewportHeightForTest => DetailScroll.ViewportHeight;
 
     /// <summary>截图模式：分类明细区块的实际状态</summary>
     internal string CategoryDetailSnapshotForTest
@@ -331,12 +298,10 @@ public partial class Statistics : UserControl
             return $"选中={Vm?.SelectedCategory ?? "(无)"} 数据={(Vm?.CategoryEntries.Count ?? 0)} 条 " +
                    $"画出的行={texts.Count} 区块可见={CategoryDetailList.IsVisible} " +
                    $"尺寸={CategoryDetailList.ActualWidth:0.#}×{CategoryDetailList.ActualHeight:0.#} " +
-                   $"滚动位置={DetailScroll.VerticalOffset:0.#}/{DetailScroll.ScrollableHeight:0.#}";
+                   $"";
         }
     }
 
-    /// <summary>当前纵向滚动位置，供测试断言"选中分类后会自动滚到明细"</summary>
-    internal double ScrollOffsetForTest => DetailScroll.VerticalOffset;
 
     /// <summary>截图模式用的图表状态，用来判断"环没画出来"是布局没跑还是动画没播</summary>
     internal string DonutSnapshot

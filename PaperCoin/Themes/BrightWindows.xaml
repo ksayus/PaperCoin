@@ -1,0 +1,47 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- 标题栏 -->
+    <!-- Windows 风格（亮色）：同上。底色取 #F3F3F3 / #FAFAFA 的 Fluent 中性阶，
+         卡片纯白，边框是 1px 冷灰而不是阴影分层。 -->
+    <!-- 玻璃背板：这几套风格表面不透明，背板用 Transparent 等于不存在。
+         键必须存在 —— 主题切换按 key 就地替换条目，少一个键 DynamicResource 会静默回退。 -->
+    <SolidColorBrush x:Key="ColorGlassBackdrop" Color="Transparent"/>
+
+    <SolidColorBrush x:Key="ColorTitleTop" Color="#F3F3F3"/>
+    <SolidColorBrush x:Key="ColorSideBar" Color="#F3F3F3"/>
+    <SolidColorBrush x:Key="ColorMainContentArea" Color="#FAFAFA"/>
+    <SolidColorBrush x:Key="ColorCardBackground" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="ColorCardBorder" Color="#E5E5E5"/>
+    <SolidColorBrush x:Key="ColorCardActionBackground" Color="#F5F5F5"/>
+    <!-- 按钮 -->
+    <SolidColorBrush x:Key="ColorSideBarBtn" Color="Transparent"/>
+    <SolidColorBrush x:Key="ColorSideBarBtnOver" Color="#EAEAEA"/>
+    <SolidColorBrush x:Key="ColorSideBarBtnActive" Color="#E0E0E0"/>
+    <SolidColorBrush x:Key="ColorSideBarBtnPressed" Color="#D6D6D6"/>
+    <!-- 主按钮（右下角 ＋） -->
+    <SolidColorBrush x:Key="ColorAddNewBillBtn" Color="#0067C0"/>
+    <SolidColorBrush x:Key="ColorAddNewBillBtnOver" Color="#1975C5"/>
+    <SolidColorBrush x:Key="ColorAddNewBillBtnPressed" Color="#005BAA"/>
+    <!-- 文字 -->
+    <SolidColorBrush x:Key="ColorTextTitle" Color="#1A1A1A"/>
+    <SolidColorBrush x:Key="ColorTextSecondary" Color="#5D5D5D"/>
+    <!-- 金额：正数为收入，负数为支出 -->
+    <SolidColorBrush x:Key="ColorPositive" Color="#0F7B0F"/>
+    <SolidColorBrush x:Key="ColorNegative" Color="#C42B1C"/>
+    <!-- 阴影 -->
+    <SolidColorBrush x:Key="ColorShadow" Color="#8A8A8A" Opacity="0.22"/>
+    <SolidColorBrush x:Key="ColorWindowShadow" Color="#8A8A8A" Opacity="0.28"/>
+    <!-- 分类色板：槽位由 Core/CategoryPalette 按分类名求稳定哈希决定，键名不可改 -->
+    <SolidColorBrush x:Key="CategoryColor01" Color="#0F6CBD"/>
+    <SolidColorBrush x:Key="CategoryColor02" Color="#6B4FC4"/>
+    <SolidColorBrush x:Key="CategoryColor03" Color="#C2397A"/>
+    <SolidColorBrush x:Key="CategoryColor04" Color="#0F7B78"/>
+    <SolidColorBrush x:Key="CategoryColor05" Color="#9A6100"/>
+    <SolidColorBrush x:Key="CategoryColor06" Color="#5D7A14"/>
+    <SolidColorBrush x:Key="CategoryColor07" Color="#4F46B8"/>
+    <SolidColorBrush x:Key="CategoryColor08" Color="#0D6E96"/>
+    <SolidColorBrush x:Key="CategoryColor09" Color="#B4501F"/>
+    <SolidColorBrush x:Key="CategoryColor10" Color="#157A4E"/>
+    <SolidColorBrush x:Key="CategoryColorOther" Color="#616161"/>
+
+</ResourceDictionary>

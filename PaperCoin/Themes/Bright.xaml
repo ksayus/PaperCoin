@@ -5,6 +5,10 @@
          DynamicResource 找不到 key 不会抛异常，只会静默回退，表现是某个控件颜色不对且没有任何报错。 -->
 
     <!-- Title -->
+    <!-- 玻璃背板：这几套风格表面不透明，背板用 Transparent 等于不存在。
+         键必须存在 —— 主题切换按 key 就地替换条目，少一个键 DynamicResource 会静默回退。 -->
+    <SolidColorBrush x:Key="ColorGlassBackdrop" Color="Transparent"/>
+
     <SolidColorBrush x:Key="ColorTitleTop" Color="#E9EDF4"/>
 
     <!-- Card -->

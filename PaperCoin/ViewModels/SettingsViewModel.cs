@@ -27,6 +27,7 @@ public partial class SettingsViewModel : ObservableObject
         _themeManager = themeManager;
 
         ApplyThemeCommand = new RelayCommand<string>(ApplyThemeMode);
+        ApplyThemeStyleCommand = new RelayCommand<string>(ApplyThemeStyle);
         ToggleAutoStartCommand = new RelayCommand(ToggleAutoStart);
         ToggleAutoUpdateCommand = new RelayCommand(ToggleAutoUpdate);
         OpenReleasesCommand = new RelayCommand(OpenReleases);
@@ -37,6 +38,9 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     public ICommand ApplyThemeCommand { get; }
+
+    /// <summary>主题风格：经典 / Windows / 液态玻璃</summary>
+    public ICommand ApplyThemeStyleCommand { get; }
     public ICommand ToggleAutoStartCommand { get; }
     public ICommand ToggleAutoUpdateCommand { get; }
     public ICommand OpenReleasesCommand { get; }
@@ -73,6 +77,12 @@ public partial class SettingsViewModel : ObservableObject
         _themeManager.ApplyMode(mode);
     }
 
+    /// <summary>切换主题风格。同样只改状态，渲染走 ResolvedThemeChanged。</summary>
+    private void ApplyThemeStyle(string? style)
+    {
+        _themeManager.ApplyStyle(style);
+    }
+
     /// <summary>系统主题变化或模式切换后刷新绑定</summary>
     public void RefreshThemeState()
     {
@@ -80,7 +90,31 @@ public partial class SettingsViewModel : ObservableObject
         OnPropertyChanged(nameof(IsDarkTheme));
         OnPropertyChanged(nameof(IsBrightTheme));
         OnPropertyChanged(nameof(ThemeText));
+
+        OnPropertyChanged(nameof(IsClassicStyle));
+        OnPropertyChanged(nameof(IsWindowsStyle));
+        OnPropertyChanged(nameof(IsLiquidStyle));
+        OnPropertyChanged(nameof(StyleText));
     }
+
+    /// <summary>当前风格的说明，给设置页那行副标题用</summary>
+    public string StyleText => _themeManager.Style switch
+    {
+        ThemeManager.StyleWindows => "Fluent 观感：纯色表面、中性灰阶、系统蓝强调",
+        ThemeManager.StyleLiquid => "半透明材质 + 发丝高光，玻璃面板透出背板",
+        _ => "项目原本的观感：圆角卡片 + 柔和阴影"
+    };
+
+    // ---- 主题风格 ----
+
+    /// <summary>经典：项目原本的观感</summary>
+    public bool IsClassicStyle => _themeManager.IsClassicStyle;
+
+    /// <summary>Windows：Fluent 观感，纯色表面 + 系统强调蓝</summary>
+    public bool IsWindowsStyle => _themeManager.IsWindowsStyle;
+
+    /// <summary>液态玻璃：半透明材质 + 发丝高光</summary>
+    public bool IsLiquidStyle => _themeManager.IsLiquidStyle;
 
     // ---- 启动 ----
 

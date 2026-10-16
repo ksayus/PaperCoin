@@ -12,7 +12,12 @@ public class AppSection
     public bool AutoUpdate { get; set; } = new();
     public string AutoUpdateSource { get; set; } = "Github";
     public bool AutoStart { get; set; } = true;
+
+    /// <summary>明暗：System / Dark / Bright</summary>
     public string Theme { get; set; } = "Dark";
+
+    /// <summary>风格：Classic / Windows / Liquid</summary>
+    public string ThemeStyle { get; set; } = "Classic";
 }
 
 public class LoggingSection

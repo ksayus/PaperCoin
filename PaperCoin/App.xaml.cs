@@ -82,7 +82,7 @@ public partial class App : Application
 
         // 主题须先于构建容器落地：MainWindow 由 StartupUri 创建，创建时 DynamicResource 即开始解析，晚了会先闪默认主题。
         var themeManager = new ThemeManager(configService);
-        ApplyTheme(themeManager.Resolved);
+        ApplyTheme(themeManager.Palette);
 
         // 跟随系统模式下，Windows 切换应用主题需要实时反映到窗口上。
         HookSystemTheme(themeManager);
@@ -153,13 +153,14 @@ public partial class App : Application
     /// 启动阶段装载主题。此时 MainWindow 尚未创建，没有 DynamicResource 解析过颜色，
     /// 可以直接替换字典实例；运行中切换须走 ThemeRenderer 的原地改写。
     /// </summary>
-    internal static void ApplyTheme(string theme)
+    /// <param name="palette">调色板名，见 <see cref="Service.ThemeManager.Palette"/></param>
+    internal static void ApplyTheme(string palette)
     {
         var merged = Current.Resources.MergedDictionaries;
         var index = ThemeRenderer.IndexOfColorDictionary(merged);
         if (index < 0) return;
 
-        merged[index] = ThemeRenderer.LoadTheme(theme);
+        merged[index] = ThemeRenderer.LoadTheme(palette);
     }
 
     /// <summary>

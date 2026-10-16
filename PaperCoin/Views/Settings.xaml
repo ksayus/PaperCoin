@@ -56,6 +56,45 @@
                     </StackPanel>
                 </Border>
 
+                <!-- 主题风格。与上面的明暗是两个独立维度：明暗决定用哪一套明度，
+                     风格决定材质与配色的性格，二者组合出 6 本调色板字典。 -->
+                <Border Style="{DynamicResource SettingRow}">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Style="{DynamicResource SettingRowIcon}"
+                                       Text="{DynamicResource IconTheme}"
+                                       FontSize="18"/>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="风格" FontSize="13"
+                                           Foreground="{DynamicResource ColorTextTitle}"/>
+                                <TextBlock Text="{Binding StyleText}"
+                                           FontSize="10" Margin="0,2,0,0"
+                                           TextTrimming="CharacterEllipsis"
+                                           Foreground="{DynamicResource ColorTextSecondary}"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Margin="28,10,0,0">
+                            <RadioButton Content="经典" Style="{DynamicResource ModeRadio}"
+                                         GroupName="ThemeStyle"
+                                         IsChecked="{Binding IsClassicStyle, Mode=OneWay}"
+                                         Command="{Binding ApplyThemeStyleCommand}"
+                                         CommandParameter="Classic"/>
+                            <RadioButton Content="Windows" Style="{DynamicResource ModeRadio}"
+                                         GroupName="ThemeStyle"
+                                         IsChecked="{Binding IsWindowsStyle, Mode=OneWay}"
+                                         Command="{Binding ApplyThemeStyleCommand}"
+                                         CommandParameter="Windows"/>
+                            <RadioButton Content="液态玻璃" Style="{DynamicResource ModeRadio}"
+                                         GroupName="ThemeStyle"
+                                         Margin="0"
+                                         IsChecked="{Binding IsLiquidStyle, Mode=OneWay}"
+                                         Command="{Binding ApplyThemeStyleCommand}"
+                                         CommandParameter="Liquid"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
                 <!-- 启动与更新 -->
                 <TextBlock Text="启动与更新" Style="{DynamicResource SettingGroupTitle}" Margin="2,10,0,6"/>
 
