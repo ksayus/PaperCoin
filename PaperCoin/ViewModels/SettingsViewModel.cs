@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -6,6 +6,7 @@ using Microsoft.Win32;
 using PaperCoin.Core;
 using PaperCoin.Core.Models;
 using PaperCoin.Service;
+using PaperCoin.Service.LanSync;
 using PaperCoin.Services;
 
 namespace PaperCoin.ViewModels;
@@ -21,12 +22,18 @@ public partial class SettingsViewModel : ObservableObject
     private readonly ConfigService _configService;
     private readonly ThemeManager _themeManager;
     private readonly AppUpdater _updater;
+    private readonly LanSyncService? _lanSyncService;
 
-    public SettingsViewModel(ConfigService configService, ThemeManager themeManager, AppUpdater updater)
+    public SettingsViewModel(
+        ConfigService configService,
+        ThemeManager themeManager,
+        AppUpdater updater,
+        LanSyncService? lanSyncService = null)
     {
         _configService = configService;
         _themeManager = themeManager;
         _updater = updater;
+        _lanSyncService = lanSyncService;
 
         ApplyThemeCommand = new RelayCommand<string>(ApplyThemeMode);
         ApplyThemeStyleCommand = new RelayCommand<string>(ApplyThemeStyle);
@@ -494,6 +501,40 @@ public partial class SettingsViewModel : ObservableObject
     // ---- 关于 / 维护 ----
 
     public string VersionText => Constants.AppVersion;
+
+    // ---- 局域网同步 ----
+
+    /// <summary>SyncWindow 的入口；未接入（例如 UI 测试宿主）时为 null。</summary>
+    public LanSyncService? LanSyncService => _lanSyncService;
+
+    /// <summary>设置页那一行的副标题：启用状态 + 监听端口 / 待处理冲突。</summary>
+    public string LanSyncStatusText
+    {
+        get
+        {
+            if (_lanSyncService is null) return "未接入";
+
+            var state = _lanSyncService.GetState();
+            if (!state.Enabled) return "已关闭";
+
+            if (!_lanSyncService.IsRunning) return "已启用 · 未监听";
+
+            var pending = _lanSyncService.GetPendingConflicts().Count;
+            if (pending > 0) return $"待处理冲突 {pending} 处";
+
+            var auto = state.AutoSync ? "自动同步" : "仅手动";
+            var port = _lanSyncService.ListeningPort;
+
+            return port > 0 ? $"已启用 · TCP {port} · {auto}" : $"已启用 · {auto}";
+        }
+    }
+
+    /// <summary>同步窗口关闭、服务状态变化后刷新那一行。</summary>
+    public void RefreshLanSyncState()
+    {
+        OnPropertyChanged(nameof(LanSyncStatusText));
+        OnPropertyChanged(nameof(LanSyncService));
+    }
 
     /// <summary>
     /// 界面上展示的数据目录，即账单文件夹本身。层级布局（yyyy/M/d/bills.json）

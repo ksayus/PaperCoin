@@ -6,8 +6,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Win32;
 using PaperCoin.Core;
 using PaperCoin.Service;
+using PaperCoin.Service.LanSync;
 using PaperCoin.Services;
 using PaperCoin.ViewModels;
+using PaperCoin.Views;
 using Serilog;
 
 namespace PaperCoin;
@@ -27,6 +29,12 @@ public partial class App : Application
     /// 守卫随之失效且不报错。
     /// </summary>
     private static Mutex? _singleInstance;
+
+    /// <summary>局域网同步单例。启动后常驻，退出时停止监听。</summary>
+    private static LanSyncService? _lanSync;
+
+    /// <summary>当前显示的冲突窗口。App 负责保证同一时刻只有一个。</summary>
+    private static ConflictWindow? _conflictWindow;
 
     /// <summary>
     /// 主窗口是否用 WPF 的分层窗口（<c>AllowsTransparency=True</c>）。
@@ -109,6 +117,10 @@ public partial class App : Application
         // 账单持久化。内部持有内存索引，注册为单例避免重复构建索引。
         services.AddSingleton<BillRepository>();
 
+        // 局域网同步。SyncStore 只负责状态文件；LanSyncService 持有监听、发现与自动同步循环。
+        services.AddSingleton<SyncStore>();
+        services.AddSingleton<LanSyncService>();
+
         // 自动更新。单例：它内部持有 HttpClient，反复 new 会把连接池和 DNS 缓存丢掉。
         services.AddSingleton(_ => new AppUpdater());
 
@@ -118,6 +130,99 @@ public partial class App : Application
         services.AddTransient<SettingsViewModel>();
 
         Services = services.BuildServiceProvider();
+
+        StartLanSync();
+    }
+
+    // ---- 局域网同步 ----
+
+    private static void StartLanSync()
+    {
+        _lanSync = Services.GetRequiredService<LanSyncService>();
+        _lanSync.ConflictsDetected += OnConflictsDetected;
+
+        // 启动监听是异步的；不能挡住主窗口显示。StartAsync 内部已捕获可预期的失败。
+        _ = _lanSync.StartAsync().ContinueWith(
+            task => Log.Warning(task.Exception, "局域网同步启动失败"),
+            TaskContinuationOptions.OnlyOnFaulted);
+    }
+
+    private static void StopLanSync()
+    {
+        if (_lanSync is null) return;
+
+        try
+        {
+            if (_conflictWindow is { IsLoaded: true } window)
+                window.Close();
+        }
+        catch (InvalidOperationException)
+        {
+            // 窗口已经关闭
+        }
+
+        _lanSync.ConflictsDetected -= OnConflictsDetected;
+
+        try
+        {
+            _lanSync.StopAsync().GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "停止局域网同步失败");
+        }
+
+        _lanSync = null;
+        _conflictWindow = null;
+    }
+
+    private static void OnConflictsDetected(object? sender, ConflictsDetectedEventArgs e)
+    {
+        var app = Current;
+        if (app is null) return;
+
+        app.Dispatcher.BeginInvoke(new Action(() => ShowConflictWindow(e.Session)));
+    }
+
+    private static void ShowConflictWindow(SyncConflictSession session)
+    {
+        if (_lanSync is null) return;
+
+        // 自动同步一次只跑一个会话，但同一台设备可能在窗口还开着时又发现新冲突：
+        // 复用窗口并替换内容，不重复开窗。
+        if (_conflictWindow is { IsLoaded: true } existing)
+        {
+            if (string.Equals(existing.PeerId, session.PeerId, StringComparison.Ordinal))
+            {
+                existing.UpdateSession(session);
+                existing.Activate();
+                return;
+            }
+
+            // 不同设备：同一时刻只保留一个冲突窗口。关闭旧窗口等价于取消它的选择。
+            existing.Close();
+        }
+
+        var window = new ConflictWindow(_lanSync, session);
+
+        // 如果同步窗口正以模态方式打开，冲突窗口要挂在它下面：
+        // 模态循环会禁用主窗口，挂在主窗口上会让冲突窗口也点不动。
+        Window? owner = Current?.Windows
+            .OfType<SyncWindow>()
+            .FirstOrDefault(w => w.IsLoaded && w.IsVisible);
+
+        owner ??= Current?.MainWindow is { IsLoaded: true } mainWindow ? mainWindow : null;
+
+        if (owner is not null)
+            window.Owner = owner;
+
+        window.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_conflictWindow, window)) _conflictWindow = null;
+        };
+
+        _conflictWindow = window;
+        window.Show();
     }
 
     // ---- 单实例 ----
@@ -207,6 +312,8 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        StopLanSync();
+
         Log.Information("PaperCoin Exit.");
         Log.CloseAndFlush();
 

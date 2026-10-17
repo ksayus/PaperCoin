@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -378,6 +378,9 @@ public partial class CalenderBillViewModel : ObservableObject
 
         RefreshTotals();
     }
+
+    /// <summary>同步服务在后台改完账单后由 MainWindow 调用；保持当前日历视图与锚点不变。</summary>
+    internal Task RefreshFromDiskAsync() => RefreshAsync();
 
     private async Task LoadDayAsync()
     {

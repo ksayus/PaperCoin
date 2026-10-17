@@ -6,6 +6,7 @@
 [Ll]og/
 [Ll]ogs/
 artifacts/
+dist/
 publish/
 *.binlog
 *.tlog

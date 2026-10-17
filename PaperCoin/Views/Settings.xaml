@@ -249,6 +249,38 @@
                     </Grid>
                 </Border>
 
+                <!-- 局域网同步 -->
+                <TextBlock Text="局域网" Style="{DynamicResource SettingGroupTitle}" Margin="2,10,0,6"/>
+
+                <Border Style="{DynamicResource SettingRow}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Orientation="Horizontal"
+                                    VerticalAlignment="Center">
+                            <TextBlock Style="{DynamicResource SettingRowIcon}"
+                                       Text="{DynamicResource IconUpdate}"
+                                       FontSize="18"/>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="局域网同步" FontSize="13"
+                                           Foreground="{DynamicResource ColorTextTitle}"/>
+                                <TextBlock Text="{Binding LanSyncStatusText}"
+                                           FontSize="10" Margin="0,2,0,0"
+                                           TextTrimming="CharacterEllipsis"
+                                           Foreground="{DynamicResource ColorTextSecondary}"/>
+                            </StackPanel>
+                        </StackPanel>
+
+                        <Button Grid.Column="1" Content="管理"
+                                Style="{DynamicResource SettingButton}"
+                                VerticalAlignment="Center"
+                                Click="LanSyncManage_Click"/>
+                    </Grid>
+                </Border>
+
                 <!-- 数据与关于 -->
                 <TextBlock Text="数据与关于" Style="{DynamicResource SettingGroupTitle}" Margin="2,10,0,6"/>
 

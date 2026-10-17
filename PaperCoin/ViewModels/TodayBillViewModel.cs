@@ -114,6 +114,9 @@ public partial class TodayBillViewModel : ObservableObject
         RefreshSummary();
     }
 
+    /// <summary>同步服务在后台改完账单后由 MainWindow 调用，保持当前可见页与磁盘一致。</summary>
+    internal Task RefreshFromDiskAsync() => ReloadTodayAsync();
+
     /// <summary>把当前集合同步成目标内容，尽量保留已有元素实例</summary>
     private void SyncEntries(IReadOnlyList<BillEntry> target)
     {

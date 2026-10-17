@@ -1,4 +1,4 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -7,9 +7,11 @@ using LAE;
 using Microsoft.Extensions.DependencyInjection;
 using PaperCoin.Core;
 using PaperCoin.Service;
+using PaperCoin.Service.LanSync;
 using PaperCoin.Services;
 using PaperCoin.ViewModels;
 using PaperCoin.Views;
+using Serilog;
 
 namespace PaperCoin;
 
@@ -73,6 +75,10 @@ public partial class MainWindow : Window
 
         NavigateTo("TodayBill");
         Loaded += MainWindow_Loaded;
+
+        // 同步完成后刷新当前可见的账单页；事件来自网络线程，处理函数里再编组回 Dispatcher。
+        if (App.Services?.GetService(typeof(LanSyncService)) is LanSyncService lanSync)
+            lanSync.SyncCompleted += OnLanSyncCompleted;
 
         // SizeChanged 在拖拽时会被节流，用 LayoutUpdated 保证布局变化后校正一次。
         SizeChanged += (_, _) => RepositionIndicator(animate: false);
@@ -211,6 +217,47 @@ public partial class MainWindow : Window
 
         if (item == NavItem.Statistics && MainContentArea.Child is Views.Statistics statistics)
             _ = statistics.RefreshAsync();
+    }
+
+    private void OnLanSyncCompleted(object? sender, SyncCompletedEventArgs e)
+    {
+        try
+        {
+            _ = Dispatcher.InvokeAsync(RefreshCurrentPageAfterSyncAsync, DispatcherPriority.Background);
+        }
+        catch (InvalidOperationException)
+        {
+            // 窗口正在关闭
+        }
+    }
+
+    /// <summary>
+    /// 同步（自动或手动）已经改完磁盘。只刷新当前可见的账单页，日历保留用户选中的锚点；
+    /// 设置页不在这里处理，它自己订阅同步服务的事件。
+    /// </summary>
+    private async Task RefreshCurrentPageAfterSyncAsync()
+    {
+        try
+        {
+            switch (MainContentArea.Child)
+            {
+                case TodayBill today when today.DataContext is TodayBillViewModel todayVm:
+                    await todayVm.RefreshFromDiskAsync();
+                    break;
+
+                case CalenderBill calendar when calendar.DataContext is CalenderBillViewModel calendarVm:
+                    await calendarVm.RefreshFromDiskAsync();
+                    break;
+
+                case Statistics statistics:
+                    await statistics.RefreshAsync();
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "同步后刷新当前页面失败");
+        }
     }
 
     private void NavigateTo(string pageName)

@@ -1,0 +1,303 @@
+<Window x:Class="PaperCoin.Views.SyncWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:conv="clr-namespace:PaperCoin.Converters"
+        xmlns:ctl="clr-namespace:PaperCoin.Controls"
+        Title="局域网同步"
+        Width="500" Height="680"
+        MinWidth="460" MinHeight="520"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        ResizeMode="NoResize"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        WindowStartupLocation="CenterOwner"
+        Foreground="{DynamicResource ColorTextTitle}">
+
+    <Window.Resources>
+        <conv:BoolToVisibilityConverter x:Key="BoolToVis"/>
+    </Window.Resources>
+
+    <Border CornerRadius="8"
+            Background="{DynamicResource ColorMainContentArea}"
+            BorderBrush="{DynamicResource ColorCardBorder}"
+            BorderThickness="1"
+            ClipToBounds="True">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="38"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- 标题栏（可拖动） -->
+            <Border Grid.Row="0"
+                    Background="{DynamicResource ColorTitleTop}"
+                    CornerRadius="7,7,0,0"
+                    MouseLeftButtonDown="TitleBorder_MouseLeftButtonDown">
+                <Grid>
+                    <TextBlock Text="局域网同步" FontSize="14" FontWeight="Bold"
+                               VerticalAlignment="Center" Margin="16,0,0,0"
+                               Foreground="{DynamicResource ColorTextTitle}"/>
+                    <Button Style="{DynamicResource CloseButtonStyle}"
+                            HorizontalAlignment="Right" Margin="0,0,8,0"
+                            Click="Close_Click"/>
+                </Grid>
+            </Border>
+
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Margin="16,12,16,18">
+
+                    <!-- 状态 -->
+                    <Border Style="{DynamicResource SettingRow}">
+                        <StackPanel>
+                            <TextBlock Text="{Binding StatusText}" FontSize="14" FontWeight="Bold"
+                                       Foreground="{DynamicResource ColorTextTitle}"/>
+                            <TextBlock Text="{Binding LastMessage}" FontSize="10" Margin="0,3,0,0"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource ColorTextSecondary}"/>
+                            <TextBlock Text="{Binding LastSyncText}" FontSize="10" Margin="0,3,0,0"
+                                       Foreground="{DynamicResource ColorTextSecondary}"/>
+                            <TextBlock Text="{Binding ListenerText}" FontSize="10" Margin="0,3,0,0"
+                                       Foreground="{DynamicResource ColorTextSecondary}"/>
+                            <TextBlock Text="{Binding BusyText}" FontSize="10" Margin="0,3,0,0"
+                                       Foreground="{DynamicResource ColorAddNewBillBtn}"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 开关 -->
+                    <TextBlock Text="连接" Style="{DynamicResource SettingGroupTitle}" Margin="2,4,0,6"/>
+
+                    <Border Style="{DynamicResource SettingRow}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Orientation="Horizontal"
+                                        VerticalAlignment="Center">
+                                <TextBlock Style="{DynamicResource SettingRowIcon}"
+                                           Text="{DynamicResource IconUpdate}" FontSize="18"/>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Text="启用局域网同步" FontSize="13"
+                                               Foreground="{DynamicResource ColorTextTitle}"/>
+                                    <TextBlock Text="{Binding EnableHint}" FontSize="10" Margin="0,2,0,0"
+                                               TextWrapping="Wrap" MaxWidth="250"
+                                               Foreground="{DynamicResource ColorTextSecondary}"/>
+                                </StackPanel>
+                            </StackPanel>
+                            <ctl:SwitchToggle Grid.Column="1" VerticalAlignment="Center"
+                                              IsOn="{Binding IsEnabled, Mode=OneWay}"
+                                              Command="{Binding ToggleEnabledCommand}"/>
+                        </Grid>
+                    </Border>
+
+                    <Border Style="{DynamicResource SettingRow}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" Orientation="Horizontal"
+                                        VerticalAlignment="Center">
+                                <TextBlock Style="{DynamicResource SettingRowIcon}"
+                                           Text="{DynamicResource IconRefresh}" FontSize="17"/>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Text="自动同步（20 秒）" FontSize="13"
+                                               Foreground="{DynamicResource ColorTextTitle}"/>
+                                    <TextBlock Text="只对已配对设备生效；Id 较小的一侧主动连接"
+                                               FontSize="10" Margin="0,2,0,0" TextWrapping="Wrap"
+                                               MaxWidth="250"
+                                               Foreground="{DynamicResource ColorTextSecondary}"/>
+                                </StackPanel>
+                            </StackPanel>
+                            <ctl:SwitchToggle Grid.Column="1" VerticalAlignment="Center"
+                                              IsOn="{Binding AutoSyncEnabled, Mode=OneWay}"
+                                              Command="{Binding ToggleAutoSyncCommand}"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- 同步码与设备名 -->
+                    <TextBlock Text="配对" Style="{DynamicResource SettingGroupTitle}" Margin="2,10,0,6"/>
+
+                    <Border Style="{DynamicResource SettingRow}">
+                        <StackPanel>
+                            <TextBlock Text="同步码" FontSize="12"
+                                       Foreground="{DynamicResource ColorTextTitle}"/>
+                            <Grid Margin="0,6,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0"
+                                         Text="{Binding Code, UpdateSourceTrigger=PropertyChanged}"
+                                         CharacterCasing="Upper"
+                                         Padding="8,6" FontSize="13"
+                                         CaretBrush="{DynamicResource ColorTextTitle}"
+                                         Foreground="{DynamicResource ColorTextTitle}"
+                                         Background="{DynamicResource ColorCardBackground}"
+                                         BorderBrush="{DynamicResource ColorCardBorder}"
+                                         BorderThickness="1"/>
+                                <Button Grid.Column="1" Content="生成"
+                                        Style="{DynamicResource SettingButton}"
+                                        Margin="6,0,0,0"
+                                        Command="{Binding GenerateCodeCommand}"/>
+                                <Button Grid.Column="2" Content="保存"
+                                        Style="{DynamicResource SettingButton}"
+                                        Margin="6,0,0,0"
+                                        Command="{Binding SaveCodeCommand}"/>
+                            </Grid>
+                            <TextBlock Text="6–12 位大写字母或数字；只在本机参与 HMAC，不会通过网络发送"
+                                       FontSize="10" Margin="0,5,0,0" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource ColorTextSecondary}"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{DynamicResource SettingRow}">
+                        <StackPanel>
+                            <TextBlock Text="设备名" FontSize="12"
+                                       Foreground="{DynamicResource ColorTextTitle}"/>
+                            <Grid Margin="0,6,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0"
+                                         Text="{Binding DeviceName, UpdateSourceTrigger=PropertyChanged}"
+                                         Padding="8,6" FontSize="13"
+                                         CaretBrush="{DynamicResource ColorTextTitle}"
+                                         Foreground="{DynamicResource ColorTextTitle}"
+                                         Background="{DynamicResource ColorCardBackground}"
+                                         BorderBrush="{DynamicResource ColorCardBorder}"
+                                         BorderThickness="1"/>
+                                <Button Grid.Column="1" Content="保存"
+                                        Style="{DynamicResource SettingButton}"
+                                        Margin="6,0,0,0"
+                                        Command="{Binding SaveDeviceNameCommand}"/>
+                            </Grid>
+                            <TextBlock Text="对方在发现列表与冲突窗口里看到的名字（1–48 字符）"
+                                       FontSize="10" Margin="0,5,0,0" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource ColorTextSecondary}"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 已配对 -->
+                    <TextBlock Text="已配对设备" Style="{DynamicResource SettingGroupTitle}" Margin="2,10,0,6"/>
+
+                    <ItemsControl ItemsSource="{Binding KnownPeers}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Style="{DynamicResource SettingRow}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding DeviceName}" FontSize="13"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="{DynamicResource ColorTextTitle}"/>
+                                            <TextBlock Text="{Binding Detail}" FontSize="10" Margin="0,2,0,0"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="{DynamicResource ColorTextSecondary}"/>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                    VerticalAlignment="Center">
+                                            <Button Content="同步"
+                                                    Style="{DynamicResource SettingButton}"
+                                                    Command="{Binding DataContext.SyncPeerCommand,
+                                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                    CommandParameter="{Binding}"/>
+                                            <Button Content="忘记"
+                                                    Style="{DynamicResource SettingButton}"
+                                                    Margin="6,0,0,0"
+                                                    Command="{Binding DataContext.ForgetPeerCommand,
+                                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                    CommandParameter="{Binding}"/>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <TextBlock Text="还没有配对设备。手动同步成功一次后，对方会自动加入这个列表。"
+                               FontSize="10" Margin="2,-2,0,6" TextWrapping="Wrap"
+                               Foreground="{DynamicResource ColorTextSecondary}"/>
+
+                    <!-- 已发现 -->
+                    <TextBlock Text="发现的未配对设备" Style="{DynamicResource SettingGroupTitle}" Margin="2,10,0,6"/>
+
+                    <ItemsControl ItemsSource="{Binding DiscoveredPeers}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Style="{DynamicResource SettingRow}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding DeviceName}" FontSize="13"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="{DynamicResource ColorTextTitle}"/>
+                                            <TextBlock Text="{Binding Endpoint}" FontSize="10" Margin="0,2,0,0"
+                                                       Foreground="{DynamicResource ColorTextSecondary}"/>
+                                        </StackPanel>
+                                        <Button Grid.Column="1" Content="同步"
+                                                Style="{DynamicResource SettingButton}"
+                                                VerticalAlignment="Center"
+                                                Command="{Binding DataContext.SyncDiscoveredCommand,
+                                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                                CommandParameter="{Binding}"/>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <TextBlock Text="只自动同步已配对设备；陌生设备需要在这里手动点一次同步。"
+                               FontSize="10" Margin="2,-2,0,6" TextWrapping="Wrap"
+                               Foreground="{DynamicResource ColorTextSecondary}"/>
+
+                    <!-- 手动 -->
+                    <TextBlock Text="手动连接" Style="{DynamicResource SettingGroupTitle}" Margin="2,10,0,6"/>
+
+                    <Border Style="{DynamicResource SettingRow}">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox Grid.Column="0"
+                                     Text="{Binding ManualEndpoint, UpdateSourceTrigger=PropertyChanged}"
+                                     Padding="8,6" FontSize="13"
+                                     CaretBrush="{DynamicResource ColorTextTitle}"
+                                     Foreground="{DynamicResource ColorTextTitle}"
+                                     Background="{DynamicResource ColorCardBackground}"
+                                     BorderBrush="{DynamicResource ColorCardBorder}"
+                                     BorderThickness="1"/>
+                            <Button Grid.Column="1" Content="同步"
+                                    Style="{DynamicResource SettingButton}"
+                                    Margin="6,0,0,0"
+                                    Command="{Binding SyncManualCommand}"/>
+                        </Grid>
+                    </Border>
+
+                    <TextBlock Text="例如 192.168.1.20:47832。Windows 防火墙首次可能弹出允许提示；本功能无加密，只建议在可信局域网使用。"
+                               FontSize="10" Margin="2,2,0,0" TextWrapping="Wrap"
+                               Foreground="{DynamicResource ColorTextSecondary}"/>
+
+                    <!-- 错误 -->
+                    <TextBlock Text="{Binding ErrorText}" FontSize="10" Margin="2,8,0,0"
+                               TextWrapping="Wrap"
+                               Foreground="{DynamicResource ColorNegative}"
+                               Visibility="{Binding HasError, Converter={StaticResource BoolToVis}}"/>
+
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Border>
+</Window>

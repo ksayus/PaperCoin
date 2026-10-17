@@ -67,6 +67,8 @@ Windows 桌面记账程序。WPF + .NET 10，单机运行，账单以按日期�
 | `PaperCoin.Service` | `net10.0` | 配置读写、主题状态、账单持久化 |
 | `PaperCoin.Setup` | — | Visual Studio 安装项目（`.vdproj`），生成 MSI 与 `setup.exe` |
 | `tools/UiSmokeTest` | `net10.0-windows` | 手工驱动的 UI 冒烟测试，不在解决方案内 |
+| `PaperCoin.Android` | Kotlin / Compose | Android 版，独立 Gradle 工程，不在解决方案内 |
+| `tools/SyncTests` | `net10.0-windows` | 局域网同步协议测试控制台，不在解决方案内 |
 
 ```
 PaperCoin/
@@ -85,6 +87,7 @@ PaperCoin/
 ├── PaperCoin.Service/              配置、主题状态、账单持久化
 ├── PaperCoin.Setup/                安装项目（生成物不入库）
 ├── tools/UiSmokeTest/              UI 冒烟测试
+├── tools/SyncTests/                局域网同步协议测试
 └── LivelyAnimationEngine/          LAE 动画引擎（未纳入版本管理，见下文）
 ```
 
@@ -99,9 +102,36 @@ dotnet build PaperCoin.sln
 dotnet run --project PaperCoin/PaperCoin.csproj
 ```
 
+### Android 版
+
+Android 版在 `PaperCoin.Android/`，是独立的 Gradle 工程（Kotlin + Jetpack Compose），不参与 `PaperCoin.sln` 构建。功能对齐今日 / 日历 / 统计 / 设置，账单 JSON 与桌面版同构，支持 ZIP 备份与桌面版 `Bills` 文件夹导入；同一局域网内可与 Windows 桌面版或另一台 Android 自动同步，冲突逐条选择保留哪一边或取消。同步协议见 [docs/lan-sync-protocol.md](docs/lan-sync-protocol.md)。
+
+```powershell
+cd PaperCoin.Android
+.\gradlew.bat :app:assembleRelease
+```
+
+签名、数据迁移、与桌面版的差异见 [PaperCoin.Android/README.md](PaperCoin.Android/README.md)。
+
+### 局域网同步
+
+Windows 与 Android、Android 与 Android 之间可以在同一局域网同步账单：
+
+1. 两端都打开「局域网同步」，在其中一端生成 8 位同步码，另一端输入同一个码。
+2. 第一次在发现到的设备上点「同步」（或手动填对方 `主机:端口`）；成功后自动记住对方。
+3. 之后应用在前台（Android）/ 程序运行期间（Windows）每 20 秒自动发现并同步。
+4. 同一笔流水两边都改过，或一边删除、另一边修改时，会弹出冲突页：逐条选「保留本机 / 保留对方」，或「取消同步」。取消不会写入任何一侧。
+5. 同步期间两端都会校验账单快照哈希；有人在同步中途改账会让整次同步作废并提示重试，不会覆盖新改动。
+
+发现用 UDP 47831，数据用 TCP 47832（端口占用时自动改用其它端口并在发现包中广播实际端口）。Windows 第一次监听时防火墙可能询问，需要放行专用网络；广播被挡住时用手动 `host:端口`。协议、哈希与合并规则见 [docs/lan-sync-protocol.md](docs/lan-sync-protocol.md)。
+
+只在可信局域网使用：传输没有 TLS 加密，同网段嗅探者可以看到账单内容；同步码只用于阻止误连。完整说明见 [PaperCoin.Android/README.md](PaperCoin.Android/README.md) 的「局域网同步」一节。
+
 ### 打包安装程序
 
 `.vdproj` 是 Visual Studio 专有的项目类型，MSBuild 不认识它（`dotnet build` 只会给一条 `MSB4078` 警告并跳过）。所以走两段：先发布应用，再用 `devenv` 生成安装包。
+
+> **VS 2026 说明**：旧 `.vdproj` 开头的 `"VSVersion" = "3:800"` 会让 VS 2026 在加载安装项目时直接取消；该行已移除。现在 `devenv` 可以正常生成 MSI 与 `setup.exe`；旧版 VS 安装项目模板本身也没有 `VSVersion`，不影响 VS 2022。
 
 ```powershell
 dotnet publish PaperCoin/PaperCoin.csproj -c Release
@@ -358,7 +388,14 @@ cd tools/UiSmokeTest
 dotnet run
 ```
 
-25 项检查，覆盖主题资源键对齐、图标码位是否存在于字体、侧边栏指示器随窗口尺寸重算、四个页面的布局与交互、保存链路的串行化与增量同步、动效是否真的向 LAE 注册、分类色板的稳定性与可解析性、仓库按分类汇总支出的口径、统计页三份派生数据（圆环 / 排行 / 趋势）与下钻、圆环弧角与占比是否一致、导出 CSV 是否带 UTF-8 BOM 等。
+33 项检查，覆盖主题资源键对齐、图标码位是否存在于字体、侧边栏指示器随窗口尺寸重算、四个页面的布局与交互、保存链路的串行化与增量同步、动效是否真的向 LAE 注册、分类色板的稳定性与可解析性、仓库按分类汇总支出的口径、统计页三份派生数据（圆环 / 排行 / 趋势）与下钻、圆环弧角与占比是否一致、导出 CSV 是否带 UTF-8 BOM 等。
+
+局域网同步的协议哈希、三方合并、冲突、日期移动、帧格式、状态文件、仓库原子 apply，以及同进程 TCP 回环会话，由独立控制台覆盖：
+
+```powershell
+cd tools/SyncTests
+dotnet run
+```
 
 这里不引入测试框架：需要验证的是真实布局、真实绑定和真实交互，测试框架帮不上忙。程序直接构造 View、量它的尺寸、驱动它的命令与事件，把编译期看不出来的问题（缺少的 `StaticResource`、失效的 `RelativeSource`、模板名字域解析失败、布局塌陷、绑定路径写错）逼出来。
 

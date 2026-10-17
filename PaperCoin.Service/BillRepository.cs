@@ -1,6 +1,8 @@
-﻿using System.Text.Json;
+using System.Globalization;
+using System.Text.Json;
 using PaperCoin.Core;
 using PaperCoin.Core.Models;
+using PaperCoin.Service.LanSync;
 using Serilog;
 
 namespace PaperCoin.Service;
@@ -13,6 +15,19 @@ namespace PaperCoin.Service;
 public class BillRepository
 {
     private const string IndexFileName = "bills.json";
+
+    /// <summary>
+    /// 账单根目录。生产环境是 <see cref="Constants.BillFolder"/>；测试可以传入临时目录，
+    /// 避免同步测试碰到用户真实的账目。
+    /// </summary>
+    private readonly string _billFolder;
+
+    public BillRepository(string? billFolder = null)
+    {
+        _billFolder = string.IsNullOrWhiteSpace(billFolder)
+            ? Constants.BillFolder
+            : Path.GetFullPath(billFolder);
+    }
 
     /// <summary>保护索引的构建与替换；磁盘遍历在锁外完成，不阻塞查询。</summary>
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -312,6 +327,142 @@ public class BillRepository
         }
     }
 
+    /// <summary>
+    /// 读取当前全部流水并计算协议快照哈希。读取的是内存索引的一致副本；
+    /// 断言“磁盘仍是这份数据”的职责在 <see cref="ApplyChangesAsync"/> 的写锁内完成。
+    /// </summary>
+    public async Task<SyncSnapshot> ReadSnapshotAsync(CancellationToken ct = default)
+    {
+        await EnsureIndexAsync(ct);
+
+        List<BillEntry> entries;
+
+        lock (_index)
+        {
+            entries = _index.Values.SelectMany(list => list).ToList();
+        }
+
+        return SyncSnapshot.Create(entries.Select(SyncEntry.FromBillEntry));
+    }
+
+    /// <summary>
+    /// 原子地应用一批同步动作。
+    /// <para>
+    /// 整个方法持有与所有写路径相同的 <c>_writeGate</c>：先按**磁盘**重读快照并核对
+    /// <paramref name="expectedSnapshotHash"/>，不匹配就一个字节都不写；应用完再重读并核对
+    /// <paramref name="finalSnapshotHash"/>。这样用户在“交换快照”和“落盘”之间做的编辑
+    /// 要么整体先于同步、要么整体后于同步，不会被同步动作部分覆盖。
+    /// </para>
+    /// <para>
+    /// 校验发生在写入之前，所以 <see cref="BillApplyStatus.SnapshotChanged"/> 保证磁盘未动。
+    /// 写入之后才可能出现的 <see cref="BillApplyStatus.Internal"/> 无法回滚（协议也只要求报错），
+    /// 下一次同步会收敛。
+    /// </para>
+    /// </summary>
+    public async Task<BillApplyResult> ApplyChangesAsync(
+        string expectedSnapshotHash,
+        IReadOnlyList<SyncAction> actions,
+        string finalSnapshotHash,
+        CancellationToken ct = default)
+    {
+        if (!LanSyncHash.IsHexHash(expectedSnapshotHash) || !LanSyncHash.IsHexHash(finalSnapshotHash))
+            return new BillApplyResult(BillApplyStatus.Invalid, "快照哈希格式不正确");
+
+        // 先把动作全部校验完，避免写到一半才发现某个 Id/日期非法。
+        var deletes = new List<(DateOnly Date, Guid Id)>();
+        var upserts = new List<BillEntry>();
+
+        foreach (var action in actions)
+        {
+            switch (action.Op)
+            {
+                case SyncActionOp.Delete:
+                    if (!Guid.TryParse(action.Id, out var deleteId)
+                        || !SyncEntry.IsValidDate(action.Date))
+                        return new BillApplyResult(BillApplyStatus.Invalid, "删除动作的 Id 或日期非法");
+
+                    deletes.Add((DateOnly.ParseExact(
+                        action.Date!, "yyyy-MM-dd", CultureInfo.InvariantCulture), deleteId));
+                    break;
+
+                case SyncActionOp.Upsert:
+                    if (action.Entry is not null
+                        && Guid.TryParse(action.Entry.Id, out _)
+                        && SyncEntry.IsValidDate(action.Entry.Date))
+                    {
+                        upserts.Add(action.Entry.ToBillEntry());
+                        break;
+                    }
+
+                    return new BillApplyResult(BillApplyStatus.Invalid, "upsert 动作的账单内容非法");
+
+                default:
+                    return new BillApplyResult(BillApplyStatus.Invalid, "未知的同步动作");
+            }
+        }
+
+        await _writeGate.WaitAsync(ct);
+        try
+        {
+            var current = await ReadSnapshotFromDiskAsync(ct);
+
+            if (!string.Equals(current.Hash, expectedSnapshotHash, StringComparison.OrdinalIgnoreCase))
+            {
+                // 磁盘在交换快照之后变过。索引可能已经落后，顺手标脏。
+                _indexStale = true;
+                _revision++;
+
+                return new BillApplyResult(
+                    BillApplyStatus.SnapshotChanged,
+                    "账单在同步过程中发生了变化，本次未写入");
+            }
+
+            // 协议要求删除先于 upsert：改日期时必须先摘掉旧日期，再写新日期。
+            foreach (var (date, id) in deletes)
+                await RemoveEntryFromDayAsync(date, id, ct);
+
+            foreach (var entry in upserts)
+                await MergeEntryIntoDayAsync(entry, ct);
+
+            var after = await ReadSnapshotFromDiskAsync(ct);
+
+            // 磁盘已经是权威结果，索引无论此前是否落后都按下次访问重建。
+            _indexStale = true;
+            _revision++;
+
+            if (!string.Equals(after.Hash, finalSnapshotHash, StringComparison.OrdinalIgnoreCase))
+            {
+                Log.Warning("同步应用后快照哈希不一致: 期望 {Expected}, 实际 {Actual}",
+                    finalSnapshotHash, after.Hash);
+
+                return new BillApplyResult(BillApplyStatus.Internal, "同步后校验失败");
+            }
+
+            return new BillApplyResult(BillApplyStatus.Success, "");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException)
+        {
+            _indexStale = true;
+            _revision++;
+
+            Log.Warning(ex, "应用同步变更失败");
+            return new BillApplyResult(BillApplyStatus.Internal, "写入账单失败");
+        }
+        finally
+        {
+            _writeGate.Release();
+        }
+    }
+
+    /// <summary>绕过内存索引、按磁盘当前内容构建快照。只在写锁内用于同步校验。</summary>
+    private async Task<SyncSnapshot> ReadSnapshotFromDiskAsync(CancellationToken ct)
+    {
+        var index = await BuildIndexAsync(ct);
+
+        return SyncSnapshot.Create(
+            index.Values.SelectMany(list => list).Select(SyncEntry.FromBillEntry));
+    }
+
     /// <summary>把一条流水写进它自身的日期文件：同 Id 覆盖，新 Id 追加，其余记录不动。</summary>
     private async Task MergeEntryIntoDayAsync(BillEntry entry, CancellationToken ct)
     {
@@ -377,14 +528,14 @@ public class BillRepository
     }
 
     /// <summary>某一天的目录 <c>Bills/yyyy/M/d</c>。读、写、删三条路径共用这一处实现。</summary>
-    private static string DayDirectory(DateOnly date)
+    private string DayDirectory(DateOnly date)
         => Path.Combine(
-            Constants.BillFolder,
+            _billFolder,
             date.Year.ToString(),
             date.Month.ToString(),
             date.Day.ToString());
 
-    private static Task WriteDayAsync(DateOnly date, IReadOnlyList<BillEntry> entries, CancellationToken ct)
+    private Task WriteDayAsync(DateOnly date, IReadOnlyList<BillEntry> entries, CancellationToken ct)
     {
         var dir = DayDirectory(date);
 
@@ -426,14 +577,14 @@ public class BillRepository
     /// 遍历 Bills 目录构建 <c>日期 → 流水</c> 映射。目录名解析不出合法日期的直接跳过，
     /// 用户放在这里的备份文件夹或空目录不该让日历打不开。
     /// </summary>
-    private static async Task<Dictionary<DateOnly, List<BillEntry>>> BuildIndexAsync(CancellationToken ct)
+    private async Task<Dictionary<DateOnly, List<BillEntry>>> BuildIndexAsync(CancellationToken ct)
     {
         var index = new Dictionary<DateOnly, List<BillEntry>>();
 
-        if (!Directory.Exists(Constants.BillFolder))
+        if (!Directory.Exists(_billFolder))
             return index;
 
-        foreach (var yearDir in Directory.EnumerateDirectories(Constants.BillFolder))
+        foreach (var yearDir in Directory.EnumerateDirectories(_billFolder))
         {
             if (!int.TryParse(Path.GetFileName(yearDir), out var year)) continue;
 
