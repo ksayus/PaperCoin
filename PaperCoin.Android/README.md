@@ -70,7 +70,7 @@ keyPassword=<your-key-password>
 
 ## 版本
 
-Android 版 `1.3.8`，`versionCode = 10308`。桌面版当前也是 `1.3.8`；同步协议 v1 与版本号无关，两端可以混用。
+Android 版 `1.3.9`，`versionCode = 10309`。桌面版当前也是 `1.3.9`；同步协议 v1 与版本号无关，两端可以混用。
 以后发版改两处：`app/build.gradle.kts` 的 `versionName` 与 `versionCode`。`versionCode` 必须递增，光改
 `versionName` 不会让系统认为有新版本。
 

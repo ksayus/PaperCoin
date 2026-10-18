@@ -23,8 +23,8 @@ android {
         applicationId = "com.ksayus.papercoin"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10308
-        versionName = "1.3.8"
+        versionCode = 10309
+        versionName = "1.3.9"
 
         vectorDrawables {
             useSupportLibrary = true

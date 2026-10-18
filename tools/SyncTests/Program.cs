@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using PaperCoin.Core.Models;
 using PaperCoin.Service;
@@ -37,6 +39,7 @@ internal static class Program
         await Check("12. 端到端 TCP 会话 / 冲突 abort / 收敛", TestEndToEndAsync);
         Check("13. host:port 解析", TestEndpointParsing);
         Check("14. 同步码生成", TestGenerateCode);
+        await Check("15. 对端快照字段缺失 -> 数据不合法而不是版本不兼容", TestIncompletePeerSnapshotAsync);
 
         Console.WriteLine("========================================");
         Console.WriteLine($"通过 {_passes} 项，失败 {_failures} 项");
@@ -725,6 +728,88 @@ internal static class Program
             Require(code.Length is >= 6 and <= 12, "同步码长度");
             Require(code.All(c => c is >= 'A' and <= 'Z' or >= '0' and <= '9'),
                 "同步码字符集必须是大写 A-Z / 0-9");
+        }
+    }
+
+    // ---- 15 ----
+
+    /// <summary>
+    /// 老版本 Android 端曾把"值等于 Kotlin 默认值"的字段整个省掉，今天的账单连 date 都不发，
+    /// 于是快照被判成"非法的日期"。这里固定住两点：数据问题必须归类为 invalid（不是
+    /// protocol/版本不兼容），并且具体原因要原样传出来。
+    /// </summary>
+    private static async Task TestIncompletePeerSnapshotAsync()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        var peer = Task.Run(async () =>
+        {
+            using var client = await listener.AcceptTcpClientAsync();
+            var stream = client.GetStream();
+            var nonce = Enumerable.Range(0, 16).Select(i => (byte)i).ToArray();
+
+            await SyncFraming.ReadAsync(stream, CancellationToken.None);                 // hello
+            await SyncFraming.WriteAsync(stream, SyncMessage.Challenge(nonce), CancellationToken.None);
+            await SyncFraming.ReadAsync(stream, CancellationToken.None);                 // auth
+            await SyncFraming.WriteAsync(
+                stream, SyncMessage.Welcome(IdA, "OLD-ANDROID"), CancellationToken.None);
+            await SyncFraming.ReadAsync(stream, CancellationToken.None);                 // client snapshot
+
+            // 与 Wire.kt 的 SyncJson 省略默认值时的输出一致：entries[0] 没有 date。
+            var payload =
+                "{\"type\":\"snapshot\",\"entries\":[{\"id\":\"" + IdB
+                + "\",\"description\":\"午饭\",\"amount\":-12.5,\"category\":\"餐饮\"}]}";
+
+            var bytes = Encoding.UTF8.GetBytes(payload);
+            var header = new byte[4];
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(header, bytes.Length);
+
+            await stream.WriteAsync(header);
+            await stream.WriteAsync(bytes);
+            await stream.FlushAsync();
+
+            // 让客户端读完快照自行断开
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2));
+            }
+            catch (OperationCanceledException)
+            {
+                // 忽略
+            }
+        });
+
+        var repositoryRoot = Path.Combine(
+            Path.GetTempPath(), "PaperCoinSyncTests", "peer", Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            var repo = new BillRepository(repositoryRoot);
+            var client = new LanSyncClient(repo);
+
+            var result = await client.SyncAsync(new LanSyncClientOptions(
+                "127.0.0.1",
+                port,
+                "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                "CLIENT",
+                "ABCD2345",
+                0,
+                new Dictionary<string, string>(StringComparer.Ordinal)));
+
+            Require(!result.Success, "字段缺失的对方快照不能同步成功");
+            Equal("invalid", result.ErrorCode, "数据问题必须归类为 invalid");
+            Require(result.ErrorMessage.Contains("非法的日期", StringComparison.Ordinal),
+                $"具体原因必须原样传出，实际: {result.ErrorMessage}");
+        }
+        finally
+        {
+            listener.Stop();
+            await peer;
+
+            if (Directory.Exists(repositoryRoot)) Directory.Delete(repositoryRoot, recursive: true);
         }
     }
 

@@ -179,6 +179,11 @@ Types:
 `entries` are the same JSON objects as `bills.json`:
 `id`, `description`, `amount` (number), `category` (string/null), `date` (`yyyy-MM-dd`).
 
+Every field above must be written on the wire, even when its value equals a default
+the sender would normally use locally (empty description, zero amount, today's date).
+A receiver validates `date` and rejects the whole snapshot when it is missing, so
+omitting "equal to default" fields is a protocol violation, not an optimization.
+
 Action:
 
 ```json

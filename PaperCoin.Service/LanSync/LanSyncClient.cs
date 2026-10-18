@@ -148,8 +148,10 @@ public sealed class LanSyncClient
             if (!string.Equals(remoteMessage.Type, "snapshot", StringComparison.Ordinal))
                 throw new SyncProtocolException("expected server snapshot");
 
+            // 对方快照内容不合法属于"数据不合法"，不是版本不兼容：具体原因（如"非法的日期: ..."）
+            // 必须原样带出去，否则用户只会看到一句"协议版本不兼容"。
             if (!WireConvert.TryToSnapshot(remoteMessage, out var remoteSnapshot, out var snapshotError))
-                throw new SyncProtocolException(snapshotError);
+                return ClientSyncResult.Failure("invalid", snapshotError, serverDeviceId, serverDeviceName);
 
             var merge = MergeEngine.Merge(
                 localSnapshot,

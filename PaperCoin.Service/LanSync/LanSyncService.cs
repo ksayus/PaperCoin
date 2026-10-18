@@ -1041,13 +1041,22 @@ public sealed class LanSyncService : IAsyncDisposable
         "protocol" => "协议版本不兼容",
         "busy" => "对方正在同步，请稍后再试",
         "snapshot-changed" => "账单在同步过程中发生变化，请重试",
-        "invalid" => "对方返回的数据不合法",
-        "internal" => "同步内部错误",
+        "invalid" => WithDetail("对方返回的数据不合法", fallback),
+        "internal" => WithDetail("同步内部错误", fallback),
         "network" => "无法连接对方设备",
         "timeout" => "连接超时或对方无响应",
         "canceled" => "同步已取消",
         _ => string.IsNullOrWhiteSpace(fallback) ? "同步失败" : fallback
     };
+
+    /// <summary>
+    /// 固定标签只能说明类别；具体原因（例如"非法的日期: 2026-10-18"）才是能定位问题的信息，
+    /// 所以接在标签后面一起显示。
+    /// </summary>
+    private static string WithDetail(string label, string detail)
+        => string.IsNullOrWhiteSpace(detail) || string.Equals(detail, label, StringComparison.Ordinal)
+            ? label
+            : $"{label}：{detail}";
 
     private void ClearConflictState()
     {

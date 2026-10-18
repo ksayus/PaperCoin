@@ -24,9 +24,16 @@ const val SYNC_DISCOVERY_PORT = 47831
 const val SYNC_PREFERRED_TCP_PORT = 47832
 const val SYNC_MAX_FRAME = 8 * 1024 * 1024
 
+/**
+ * 线缆 JSON。必须写出所有非空字段，不能被"值刚好等于默认值"省掉：
+ * [com.ksayus.papercoin.data.BillEntry] 的构造参数全带默认值（date 默认今天），
+ * `encodeDefaults = false` 会让今天记的账连 `date` 都不发出去，桌面版按
+ * "yyyy-MM-dd" 校验后判成"非法的日期"。`explicitNulls = false` 让 null 的
+ * category 整体省略，与桌面版的 JsonIgnoreCondition.WhenWritingNull 对齐。
+ */
 @OptIn(ExperimentalSerializationApi::class)
 val SyncJson: Json = Json {
-    encodeDefaults = false
+    encodeDefaults = true
     explicitNulls = false
     ignoreUnknownKeys = true
 }
